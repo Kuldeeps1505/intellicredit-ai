@@ -1,0 +1,110 @@
+
+
+services:
+
+  # ── Frontend (React/Vite) ─────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend          # path to your Lovable-generated React app
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      VITE_API_URL: http://localhost:8000
+      VITE_WS_URL: ws://localhost:8000
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # ── FastAPI Backend ───────────────────────────────────────────────────
+  api:
+    build:
+      context: ./backend           # path to your FastAPI backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:password@postgres:5432/intellicredit
+      SYNC_DATABASE_URL: postgresql://postgres:password@postgres:5432/intellicredit
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: intellicredit-docs
+      MINIO_SECURE: "false"
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: "8000"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      SANDBOX_API_KEY: ${SANDBOX_API_KEY:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      CORS_ORIGINS: "http://localhost:3000,http://frontend:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: intellicredit
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8001:8000"
+    volumes:
+      - chromadata:/chroma/chroma
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+volumes:
+  pgdata:
+  redisdata:
+  chromadata:
+  miniodata:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

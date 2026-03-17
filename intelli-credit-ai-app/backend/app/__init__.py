@@ -1,0 +1,1 @@
+# IntelliCredit AI — app package
