@@ -1,51 +1,40 @@
 # ── Core API ──────────────────────────────────────────────────────────────
-fastapi==0.111.0
-uvicorn[standard]==0.29.0
-python-multipart==0.0.9
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
 python-dotenv==1.0.1
-pydantic==2.7.1
-pydantic-settings==2.2.1
-httpx==0.27.0
+pydantic==2.12.5
+pydantic-settings==2.1.0
+httpx==0.28.1
 
-# ── Database ──────────────────────────────────────────────────────────────
-sqlalchemy==2.0.30
+# ── Database (SQLite for demo) ────────────────────────────────────────────
+sqlalchemy==2.0.27
 alembic==1.13.1
-asyncpg==0.29.0
-psycopg2-binary==2.9.9
+aiosqlite==0.20.0
 
-# ── Cache ─────────────────────────────────────────────────────────────────
-redis==5.0.4
+# ── AI / LLM ──────────────────────────────────────────────────────────────
+# Gemini (primary — key in .env)
+langchain-google-genai==4.2.1
+google-generativeai==0.8.3
 
-# ── Storage ───────────────────────────────────────────────────────────────
-minio==7.2.7
+# Anthropic (optional fallback)
+# anthropic==0.28.0
 
-# ── Vector DB ─────────────────────────────────────────────────────────────
-chromadb==0.5.0
+# Agent orchestration
+langgraph==1.0.9
+langchain-core==1.2.14
+langchain-community==0.4.1
 
-# ── AI / Agents ───────────────────────────────────────────────────────────
-anthropic==0.28.0
-langchain==0.2.3
-langchain-anthropic==0.1.15
-langgraph==0.1.1
-
-# ── PDF Extraction (lightweight) ──────────────────────────────────────────
+# ── PDF Extraction ────────────────────────────────────────────────────────
 pdfplumber==0.11.0
-Pillow==10.3.0
+Pillow==11.3.0
+reportlab==4.4.10
 
 # ── Document Output ───────────────────────────────────────────────────────
 python-docx==1.1.2
 
 # ── Research ──────────────────────────────────────────────────────────────
-tavily-python==0.3.3
+httpx==0.28.1
 
 # ── Graph ─────────────────────────────────────────────────────────────────
 networkx==3.3
-
-# ── REMOVED (too heavy for MVP) ───────────────────────────────────────────
-# torch, transformers, sentence-transformers → Claude handles all NLP
-# opencv-python-headless, camelot-py[cv]     → pdfplumber replaces camelot
-# scikit-learn, numpy, pandas                → inline math replaces sklearn
-# pytesseract, pdf2image                     → OCR skipped for MVP
-# weasyprint                                 → python-docx sufficient
-
-

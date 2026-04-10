@@ -1,5 +1,7 @@
-import { useDataset } from "@/contexts/DatasetContext";
+import { useState, useEffect } from "react";
+import { usePipeline } from "@/contexts/PipelineContext";
 import { getDiligenceData } from "@/lib/diligenceData";
+import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -21,9 +23,14 @@ const statusConfig = {
 
 
 const DueDiligence = () => {
-  const { activeDataset } = useDataset();
-  const data = getDiligenceData(activeDataset);
+  const { applicationId } = usePipeline();
+  const [data, setData] = useState(getDiligenceData("fraud"));
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!applicationId) return;
+    api.getDiligence(applicationId).then(setData).catch(() => {});
+  }, [applicationId]);
 
   const categories = [...new Set(data.checks.map((c) => c.category))];
   const verified = data.checks.filter((c) => c.status === "verified").length;

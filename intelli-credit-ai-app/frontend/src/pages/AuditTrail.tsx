@@ -1,5 +1,7 @@
-import { useDataset } from "@/contexts/DatasetContext";
+import { useState, useEffect } from "react";
+import { usePipeline } from "@/contexts/PipelineContext";
 import { getAuditTrailData } from "@/lib/auditTrailData";
+import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -40,8 +42,13 @@ const complianceConfig = {
 };
 
 const AuditTrail = () => {
-  const { activeDataset } = useDataset();
-  const data = getAuditTrailData(activeDataset);
+  const { applicationId } = usePipeline();
+  const [data, setData] = useState(getAuditTrailData("fraud"));
+
+  useEffect(() => {
+    if (!applicationId) return;
+    api.getAudit(applicationId).then(setData).catch(() => {});
+  }, [applicationId]);
 
   return (
     <ScrollArea className="h-[calc(100vh-120px)]">

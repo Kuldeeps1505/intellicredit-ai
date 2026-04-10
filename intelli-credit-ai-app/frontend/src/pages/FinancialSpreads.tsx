@@ -1,5 +1,7 @@
-import { useDataset } from "@/contexts/DatasetContext";
+import { useState, useEffect } from "react";
+import { usePipeline } from "@/contexts/PipelineContext";
 import { getFinancialSpreadsData, LineItem, RatioItem } from "@/lib/financialSpreadsData";
+import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -131,8 +133,13 @@ const RatioCard = ({ ratio }: { ratio: RatioItem }) => {
 };
 
 const FinancialSpreads = () => {
-  const { activeDataset } = useDataset();
-  const data = getFinancialSpreadsData(activeDataset);
+  const { applicationId } = usePipeline();
+  const [data, setData] = useState(getFinancialSpreadsData("fraud"));
+
+  useEffect(() => {
+    if (!applicationId) return;
+    api.getFinancials(applicationId).then(setData).catch(() => {});
+  }, [applicationId]);
 
   const ratioCategories = [...new Set(data.ratios.map((r) => r.category))];
   const anomalyCount = data.ratios.filter((r) => r.anomaly).length;

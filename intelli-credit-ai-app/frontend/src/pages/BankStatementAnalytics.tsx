@@ -1,5 +1,7 @@
-import { useDataset } from "@/contexts/DatasetContext";
+import { useState, useEffect } from "react";
+import { usePipeline } from "@/contexts/PipelineContext";
 import { getBankStatementData } from "@/lib/bankStatementData";
+import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -34,8 +36,14 @@ const SummaryCard = ({ label, value, suffix, status }: { label: string; value: s
 };
 
 const BankStatementAnalytics = () => {
-  const { activeDataset } = useDataset();
-  const data = getBankStatementData(activeDataset);
+  const { applicationId } = usePipeline();
+  const [data, setData] = useState(getBankStatementData("fraud"));
+
+  useEffect(() => {
+    if (!applicationId) return;
+    api.getBankAnalytics(applicationId).then(setData).catch(() => {});
+  }, [applicationId]);
+
   const { summary } = data;
 
   const detectedFlags = data.redFlags.filter((f) => f.detected);

@@ -3,8 +3,7 @@ import { MessageSquare, X, Send, Bot, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { useDataset } from "@/contexts/DatasetContext";
-import { getRiskData } from "@/lib/riskData";
+import { usePipeline } from "@/contexts/PipelineContext";
 import { cn } from "@/lib/utils";
 
 type Message = { role: "user" | "assistant"; content: string };
@@ -26,10 +25,10 @@ function getSmartReply(input: string, companyName: string, riskScore: number): s
     return "**DSCR (Debt Service Coverage Ratio)** measures a company's ability to service its debt. A DSCR > 1.25 is generally considered healthy. You can view detailed DSCR trends on the **Financial Spreads** page.";
 
   if (q.includes("navigate") || q.includes("financial") || q.includes("spread"))
-    return "You can access **Financial Spreads** from the sidebar (📊 icon). It shows P&L, Balance Sheet, and key ratios across multiple years.";
+    return "You can access **Financial Spreads** from the sidebar. It shows P&L, Balance Sheet, and key ratios across multiple years.";
 
   if (q.includes("borrower") || q.includes("profile") || q.includes("promoter"))
-    return `**${companyName}** — visit the **Promoter Intel** page for entity networks, director backgrounds, and compliance flags. The **Dashboard** also shows a quick summary.`;
+    return `**${companyName}** — visit the **Promoter Intel** page for entity networks, director backgrounds, and compliance flags.`;
 
   if (q.includes("bank") || q.includes("statement"))
     return "Head to **Bank Analytics** in the sidebar for ABB analysis, cash flow patterns, and transaction categorization.";
@@ -41,7 +40,7 @@ function getSmartReply(input: string, companyName: string, riskScore: number): s
     return "The **Audit Trail** page logs every agent action, data extraction, and scoring decision with timestamps.";
 
   if (q.includes("hello") || q.includes("hi") || q.includes("hey"))
-    return `Hello! I'm your IntelliCredit AI assistant. I can help you understand **${companyName}**'s credit profile, explain metrics, or navigate the platform. What would you like to know?`;
+    return `Hello! I'm your IntelliCredit AI assistant. I can help you understand **${companyName}**'s credit profile, explain metrics, or navigate the platform.`;
 
   return `I can help with credit analysis for **${companyName}**, explain financial metrics, or guide you through the platform. Try asking about the risk score, DSCR, or how to navigate to a specific page.`;
 }
@@ -53,19 +52,20 @@ export function AiChatWidget() {
   const [typing, setTyping] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const { dataset, activeDataset } = useDataset();
-  const risk = getRiskData(activeDataset);
+
+  // Use real application data — no demo fallback needed here
+  const { application } = usePipeline();
+  const companyName = application?.companyName ?? "the borrower";
+  const riskScore   = application?.score ?? 0;
 
   useEffect(() => {
     if (open && messages.length === 0) {
-      setMessages([
-        {
-          role: "assistant",
-          content: `Welcome! I'm your **IntelliCredit AI** assistant. I can help analyze **${dataset.companyName}**'s credit profile or guide you through the platform. What would you like to know?`,
-        },
-      ]);
+      setMessages([{
+        role: "assistant",
+        content: `Welcome! I'm your **IntelliCredit AI** assistant. I can help analyze **${companyName}**'s credit profile or guide you through the platform. What would you like to know?`,
+      }]);
     }
-  }, [open, dataset.companyName]);
+  }, [open, companyName]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -77,13 +77,11 @@ export function AiChatWidget() {
 
   const send = (text: string) => {
     if (!text.trim()) return;
-    const userMsg: Message = { role: "user", content: text.trim() };
-    setMessages((prev) => [...prev, userMsg]);
+    setMessages((prev) => [...prev, { role: "user", content: text.trim() }]);
     setInput("");
     setTyping(true);
-
     setTimeout(() => {
-      const reply = getSmartReply(text, dataset.companyName, risk.score);
+      const reply = getSmartReply(text, companyName, riskScore);
       setMessages((prev) => [...prev, { role: "assistant", content: reply }]);
       setTyping(false);
     }, 600 + Math.random() * 800);
@@ -91,7 +89,6 @@ export function AiChatWidget() {
 
   return (
     <>
-      {/* Floating button */}
       <button
         onClick={() => setOpen((o) => !o)}
         className={cn(
@@ -104,10 +101,8 @@ export function AiChatWidget() {
         {open ? <X className="h-6 w-6" /> : <MessageSquare className="h-6 w-6" />}
       </button>
 
-      {/* Chat window */}
       {open && (
         <div className="fixed bottom-24 right-6 z-50 w-[380px] max-h-[520px] flex flex-col rounded-2xl border border-border bg-card shadow-2xl shadow-black/10 animate-in slide-in-from-bottom-4 fade-in duration-300">
-          {/* Header */}
           <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-secondary/50 rounded-t-2xl">
             <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center">
               <Bot className="h-4 w-4 text-primary" />
@@ -122,7 +117,6 @@ export function AiChatWidget() {
             </span>
           </div>
 
-          {/* Messages */}
           <ScrollArea className="flex-1 max-h-[340px]" ref={scrollRef}>
             <div className="p-4 space-y-3">
               {messages.map((msg, i) => (
@@ -167,22 +161,17 @@ export function AiChatWidget() {
             </div>
           </ScrollArea>
 
-          {/* Suggestions */}
           {messages.length <= 1 && (
             <div className="px-4 pb-2 flex flex-wrap gap-1.5">
               {SUGGESTIONS.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => send(s)}
-                  className="text-[10px] px-2.5 py-1 rounded-full border border-border bg-secondary/50 text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
-                >
+                <button key={s} onClick={() => send(s)}
+                  className="text-[10px] px-2.5 py-1 rounded-full border border-border bg-secondary/50 text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors">
                   {s}
                 </button>
               ))}
             </div>
           )}
 
-          {/* Input */}
           <div className="p-3 border-t border-border flex gap-2">
             <Input
               ref={inputRef}

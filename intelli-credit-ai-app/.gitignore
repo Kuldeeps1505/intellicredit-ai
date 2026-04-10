@@ -1,12 +1,74 @@
+# ── Python ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.eggs/
+dist/
+build/
+*.so
+
+# Virtual environment
+venv/
+.venv/
+env/
+.env/
+
+# ── Secrets — NEVER commit ────────────────────────────────
+backend/.env
+*.env
+.env.*
+!.env.example
+
+# ── Database files ────────────────────────────────────────
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# ── Local file storage (MinIO fallback) ──────────────────
+backend/local_uploads/
+
+# ── Test artifacts ────────────────────────────────────────
+# Keep test_documents/ in repo for demo purposes
+# backend/test_documents/   ← intentionally NOT ignored
+
+# ── Node / Frontend ───────────────────────────────────────
 node_modules/
+frontend/node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+.pnpm-debug.log*
 
-# Build folders
+# Build output
+frontend/dist/
+frontend/build/
 dist/
 build/
-
-# Next.js / React
 .next/
 out/
+
+# ── IDE / OS ──────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Misc ──────────────────────────────────────────────────
+backend.zip
+*.log
+*.tmp
+*.bak
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

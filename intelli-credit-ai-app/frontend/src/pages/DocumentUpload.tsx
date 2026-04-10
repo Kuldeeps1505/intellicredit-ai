@@ -1,9 +1,14 @@
 import React, { useState, useCallback, useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { Upload, Link2, FileText, CheckCircle2, AlertCircle, Loader2, Rocket, Info, Phone, Smartphone, Check } from "lucide-react";
-import { useDataset } from "@/contexts/DatasetContext";
+import {
+  Upload, Link2, FileText, CheckCircle2, AlertCircle,
+  Loader2, Rocket, Info, Phone, Smartphone, Check,
+} from "lucide-react";
+import { usePipeline } from "@/contexts/PipelineContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { api } from "@/lib/api";
 
 type UploadMode = "manual" | "aa";
 
@@ -11,111 +16,133 @@ interface DocItem {
   name: string;
   status: "pending" | "uploading" | "extracted" | "error";
   size?: string;
+  file?: File;
+  docType: string;
 }
 
 const requiredDocs: DocItem[] = [
-  { name: "Annual Report (3 years)", status: "pending" },
-  { name: "Bank Statements (12 months)", status: "pending" },
-  { name: "GST Returns (GSTR-1, 2A, 3B)", status: "pending" },
-  { name: "Income Tax Returns (3 years)", status: "pending" },
-  { name: "Audited Financials", status: "pending" },
-  { name: "Memorandum of Association", status: "pending" },
+  { name: "Annual Report (3 years)",        status: "pending", docType: "ANNUAL_REPORT" },
+  { name: "Bank Statements (12 months)",    status: "pending", docType: "BANK_STATEMENT" },
+  { name: "GST Returns (GSTR-1, 2A, 3B)",  status: "pending", docType: "GST_RETURN" },
+  { name: "Income Tax Returns (3 years)",   status: "pending", docType: "ITR" },
+  { name: "Audited Financials",             status: "pending", docType: "AUDITED_FINANCIALS" },
+  { name: "Memorandum of Association",      status: "pending", docType: "MOA" },
 ];
 
-const statusIcon = {
-  pending: <div className="h-4 w-4 rounded border border-border" />,
+const statusIcon: Record<DocItem["status"], React.ReactNode> = {
+  pending:   <div className="h-4 w-4 rounded border border-border" />,
   uploading: <Loader2 className="h-4 w-4 text-info animate-spin" />,
   extracted: <CheckCircle2 className="h-4 w-4 text-safe" />,
-  error: <AlertCircle className="h-4 w-4 text-destructive" />,
+  error:     <AlertCircle className="h-4 w-4 text-destructive" />,
 };
 
 export default function DocumentUpload() {
-  const { dataset } = useDataset();
+  const { setApplicationId, setPendingFiles, startPipeline } = usePipeline();
+  const navigate = useNavigate();
+
   const [mode, setMode] = useState<UploadMode>("manual");
   const [docs, setDocs] = useState<DocItem[]>(requiredDocs);
   const [aaStep, setAaStep] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const [showDocPicker, setShowDocPicker] = useState(false);
   const [selectedDocIndex, setSelectedDocIndex] = useState<number | null>(null);
+  const [launching, setLaunching] = useState(false);
+  const [launchError, setLaunchError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [formValues, setFormValues] = useState({
-    companyName: dataset.companyName,
-    cin: dataset.cin,
-    pan: dataset.pan,
-    gstin: dataset.gstin,
-    loanAmount: dataset.loanAmount,
-    purpose: dataset.purpose,
-    sector: dataset.sector,
+    companyName: "",
+    cin:         "",
+    pan:         "",
+    gstin:       "",
+    loanAmount:  "",
+    purpose:     "",
+    sector:      "",
   });
 
-  useEffect(() => {
-    setFormValues({
-      companyName: dataset.companyName,
-      cin: dataset.cin,
-      pan: dataset.pan,
-      gstin: dataset.gstin,
-      loanAmount: dataset.loanAmount,
-      purpose: dataset.purpose,
-      sector: dataset.sector,
-    });
-  }, [dataset]);
-
-  const handleFieldChange = (field: string, value: string) => {
+  const handleFieldChange = (field: string, value: string) =>
     setFormValues((prev) => ({ ...prev, [field]: value }));
-  };
 
-  const simulateUploadForDoc = useCallback((index: number) => {
+  // Mark a slot as uploading, then extracted once done
+  const uploadFileForDoc = useCallback(async (index: number, file: File) => {
+    setDocs((prev) =>
+      prev.map((d, i) => i === index ? { ...d, status: "uploading", file } : d)
+    );
+    // Store in pending files for the pipeline context
+    setPendingFiles(
+      docs
+        .map((d, i) => i === index ? { file, docType: d.docType } : d.file ? { file: d.file, docType: d.docType } : null)
+        .filter(Boolean) as { file: File; docType: string }[]
+    );
+    // Optimistically mark extracted (real upload happens after app creation in handleLaunchAnalysis)
     setDocs((prev) =>
       prev.map((d, i) =>
         i === index
-          ? { ...d, status: "uploading" }
+          ? { ...d, status: "extracted", size: `${(file.size / 1048576).toFixed(1)} MB`, file }
           : d
       )
     );
-    // Simulate extraction after a delay
-    setTimeout(() => {
-      setDocs((prev) =>
-        prev.map((d, i) =>
-          i === index
-            ? { ...d, status: "extracted", size: `${(Math.random() * 4 + 1).toFixed(1)} MB` }
-            : d
-        )
-      );
-    }, 1500);
-  }, []);
+  }, [docs, setPendingFiles]);
 
-  const handleDropZoneClick = () => {
-    setShowDocPicker(true);
-  };
+  const handleDropZoneClick = () => setShowDocPicker(true);
 
   const handleDocSelect = (index: number) => {
     setSelectedDocIndex(index);
     setShowDocPicker(false);
-    // Trigger file input
     fileInputRef.current?.click();
   };
 
-  const handleFileSelected = () => {
-    if (selectedDocIndex !== null) {
-      simulateUploadForDoc(selectedDocIndex);
-      setSelectedDocIndex(null);
+  const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && selectedDocIndex !== null) {
+      uploadFileForDoc(selectedDocIndex, file);
     }
-    // Reset file input
+    setSelectedDocIndex(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      setDragOver(false);
-      setShowDocPicker(true);
-    },
-    []
-  );
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    setShowDocPicker(true);
+  }, []);
 
   const advanceAA = () => {
     if (aaStep < 3) setAaStep((s) => s + 1);
+  };
+
+  const handleLaunchAnalysis = async () => {
+    setLaunching(true);
+    setLaunchError(null);
+    try {
+      // Create the application
+      const { id } = await api.createApplication({
+        company: {
+          cin:    formValues.cin,
+          name:   formValues.companyName,
+          pan:    formValues.pan,
+          gstin:  formValues.gstin,
+          sector: formValues.sector,
+        },
+        loan_amount_requested: parseFloat(formValues.loanAmount) || 0,
+        purpose: formValues.purpose,
+      });
+
+      setApplicationId(id);
+
+      // Upload any attached files
+      const uploadedDocs = docs.filter((d) => d.file && d.status === "extracted");
+      await Promise.allSettled(
+        uploadedDocs.map((d) => api.uploadDocument(id, d.file!, d.docType))
+      );
+
+      await startPipeline(id);
+      navigate("/agents");
+    } catch (err) {
+      setLaunchError(err instanceof Error ? err.message : "Failed to launch analysis");
+    } finally {
+      setLaunching(false);
+    }
   };
 
   return (
@@ -143,9 +170,9 @@ export default function DocumentUpload() {
           <div className="space-y-4">
             {[
               { label: "Company Name", field: "companyName" },
-              { label: "CIN", field: "cin" },
-              { label: "PAN", field: "pan" },
-              { label: "GSTIN", field: "gstin" },
+              { label: "CIN",          field: "cin" },
+              { label: "PAN",          field: "pan" },
+              { label: "GSTIN",        field: "gstin" },
             ].map((item) => (
               <div key={item.label} className="space-y-1">
                 <label className="text-[10px] uppercase tracking-wider text-muted-foreground font-display">
@@ -241,7 +268,6 @@ export default function DocumentUpload() {
                 transition={{ duration: 0.2 }}
                 className="space-y-4"
               >
-                {/* Hidden file input */}
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -250,7 +276,6 @@ export default function DocumentUpload() {
                   onChange={handleFileSelected}
                 />
 
-                {/* Drop Zone */}
                 <div
                   onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
                   onDragLeave={() => setDragOver(false)}
@@ -272,7 +297,6 @@ export default function DocumentUpload() {
                   </p>
                 </div>
 
-                {/* Document Picker Modal */}
                 <AnimatePresence>
                   {showDocPicker && (
                     <motion.div
@@ -327,7 +351,6 @@ export default function DocumentUpload() {
                   )}
                 </AnimatePresence>
 
-                {/* Document Checklist */}
                 <div className="bg-card border border-border rounded-lg overflow-hidden">
                   <div className="px-4 py-2.5 border-b border-border">
                     <h3 className="text-xs font-display text-muted-foreground uppercase tracking-wider">
@@ -380,7 +403,6 @@ export default function DocumentUpload() {
                   Account Aggregator Flow
                 </h3>
 
-                {/* AA Steps */}
                 <div className="space-y-0">
                   {[
                     {
@@ -449,7 +471,6 @@ export default function DocumentUpload() {
                     const active = aaStep === idx;
                     return (
                       <div key={s.step} className="relative">
-                        {/* Connector line */}
                         {idx > 0 && (
                           <div className={`absolute left-[15px] -top-0 w-0.5 h-4 ${completed ? "bg-primary" : "bg-border"}`} />
                         )}
@@ -458,7 +479,6 @@ export default function DocumentUpload() {
                             completed ? "border-primary" : "border-border"
                           }`}
                         >
-                          {/* Node */}
                           <div
                             className={`absolute left-[-13px] top-0 h-[26px] w-[26px] rounded-full flex items-center justify-center border-2 ${
                               completed
@@ -503,12 +523,25 @@ export default function DocumentUpload() {
         </div>
       </div>
 
-      {/* Bottom CTA */}
+      {launchError && (
+        <div className="mt-4 flex items-center gap-2 text-destructive text-xs font-body bg-destructive/10 border border-destructive/20 rounded-lg px-4 py-2.5">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          {launchError}
+        </div>
+      )}
+
       <div className="mt-8">
-        <button className="w-full relative overflow-hidden bg-primary text-primary-foreground font-display font-semibold text-sm py-4 rounded-lg hover:bg-primary/90 transition-colors group">
+        <button
+          onClick={handleLaunchAnalysis}
+          disabled={launching}
+          className="w-full relative overflow-hidden bg-primary text-primary-foreground font-display font-semibold text-sm py-4 rounded-lg hover:bg-primary/90 transition-colors group disabled:opacity-60 disabled:cursor-not-allowed"
+        >
           <span className="relative z-10 flex items-center justify-center gap-2">
-            <Rocket className="h-4 w-4" />
-            Launch Analysis
+            {launching ? (
+              <><Loader2 className="h-4 w-4 animate-spin" /> Launching...</>
+            ) : (
+              <><Rocket className="h-4 w-4" /> Launch Analysis</>
+            )}
           </span>
           <div className="absolute inset-0 animate-shimmer opacity-0 group-hover:opacity-100 transition-opacity" />
         </button>

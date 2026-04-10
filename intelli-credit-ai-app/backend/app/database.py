@@ -3,18 +3,28 @@ Async SQLAlchemy engine + session factory.
 Alembic uses SYNC_DATABASE_URL for migrations.
 """
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event, text
 from app.config import settings
 from app.models.models import Base
 
-# ── Async engine (used by FastAPI) ────────────────────────
+# ── Async engine (used by FastAPI + agents) ───────────────────────────────────
+connect_args = {}
+if "sqlite" in settings.database_url:
+    connect_args = {"check_same_thread": False}
+
 async_engine = create_async_engine(
     settings.database_url,
     echo=False,
-    pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
+    connect_args=connect_args,
 )
+
+# Enable WAL mode for SQLite so reads don't block writes
+if "sqlite" in settings.database_url:
+    from sqlalchemy import event as _event
+    @_event.listens_for(async_engine.sync_engine, "connect")
+    def set_wal_mode(dbapi_conn, connection_record):
+        dbapi_conn.execute("PRAGMA journal_mode=WAL")
+        dbapi_conn.execute("PRAGMA synchronous=NORMAL")
 
 AsyncSessionLocal = async_sessionmaker(
     bind=async_engine,

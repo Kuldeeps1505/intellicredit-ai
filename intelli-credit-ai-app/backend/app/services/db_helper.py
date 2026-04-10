@@ -1,22 +1,37 @@
 """
 Shared DB helper functions used by all agents.
-Agents are async background tasks and need their own DB sessions.
+Uses the same engine as the main app to avoid SQLite locking issues.
 """
 import uuid
 from datetime import datetime
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, text
 
 from app.config import settings
 
-# Separate engine for agent background tasks
-_agent_engine = create_async_engine(settings.database_url, echo=False, pool_pre_ping=True)
-_AgentSession = async_sessionmaker(bind=_agent_engine, class_=AsyncSession, expire_on_commit=False)
+
+def _get_session_factory():
+    """Lazy import to avoid circular imports — reuses the main app engine."""
+    from app.database import AsyncSessionLocal
+    return AsyncSessionLocal
 
 
-async def get_agent_db() -> AsyncSession:
-    async with _AgentSession() as session:
-        yield session
+# Alias for backward compat with agents that import _AgentSession directly
+class _AgentSessionProxy:
+    """Context manager that delegates to the main app session factory."""
+    def __init__(self):
+        self._session = None
+
+    async def __aenter__(self):
+        factory = _get_session_factory()
+        self._session = factory()
+        return await self._session.__aenter__()
+
+    async def __aexit__(self, *args):
+        return await self._session.__aexit__(*args)
+
+
+_AgentSession = _AgentSessionProxy
 
 
 async def log_agent(
@@ -39,6 +54,7 @@ async def log_agent(
         log = result.scalar_one_or_none()
         if log:
             log.status = status
+            log.logged_at = datetime.utcnow()
             if output_summary:
                 log.output_summary = output_summary
             if error_message:

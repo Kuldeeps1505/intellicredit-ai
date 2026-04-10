@@ -1,6 +1,8 @@
-import { useState, useMemo } from "react";
-import { useDataset } from "@/contexts/DatasetContext";
+import { useState, useMemo, useEffect } from "react";
+import { usePipeline } from "@/contexts/PipelineContext";
 import { getCamData } from "@/lib/camData";
+import { getRiskData } from "@/lib/riskData";
+import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -14,12 +16,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { generateCamPdf, generateCamPdfBlobUrl } from "@/lib/generateCamPdf";
 import { RiskGauge } from "@/components/risk/RiskGauge";
-import { getRiskData } from "@/lib/riskData";
-import { getPromoterData } from "@/lib/promoterData";
-import { getFinancialSpreadsData } from "@/lib/financialSpreadsData";
-import { getBankStatementData } from "@/lib/bankStatementData";
-import { getDiligenceData } from "@/lib/diligenceData";
-import { getFacilityData } from "@/lib/facilityData";
 
 const decisionConfig = {
   approve: { icon: CheckCircle2, color: "text-safe", bg: "bg-safe/15 border-safe/30", label: "APPROVED" },
@@ -34,26 +30,27 @@ const difficultyConfig = {
 };
 
 const CamReport = () => {
-  const { activeDataset, dataset } = useDataset();
-  const data = getCamData(activeDataset);
-  const riskData = getRiskData(activeDataset);
-  const dec = decisionConfig[data.recommendation.decision];
+  const { applicationId, application } = usePipeline();
+  const [data, setData] = useState(getCamData("fraud"));
+  const [riskData, setRiskData] = useState(getRiskData("fraud"));
+  const dec = decisionConfig[data.recommendation.decision] ?? decisionConfig.conditional;
   const DecIcon = dec.icon;
 
-  // Interactive counterfactual state
-  const [enabledActions, setEnabledActions] = useState<Set<number>>(new Set());
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!applicationId) return;
+    api.getCam(applicationId).then(setData).catch(() => {});
+    api.getRisk(applicationId).then(setRiskData).catch(() => {});
+  }, [applicationId]);
 
   const getPdfData = () => ({
     camData: data,
-    dataset,
+    dataset: { companyName: application?.companyName ?? "—", cin: application?.cin ?? "—", pan: application?.pan ?? "—", gstin: application?.gstin ?? "—", loanAmount: application?.loanAmount ?? "—", purpose: application?.purpose ?? "—", sector: application?.sector ?? "—", id: "approve" as const, label: "Live", emoji: "📄", score: riskData.score },
     riskData,
-    promoterData: getPromoterData(activeDataset),
-    financialData: getFinancialSpreadsData(activeDataset),
-    bankData: getBankStatementData(activeDataset),
-    diligenceData: getDiligenceData(activeDataset),
-    facilityData: getFacilityData(activeDataset),
+    promoterData: null, financialData: null, bankData: null, diligenceData: null, facilityData: null,
   });
+
+  const [enabledActions, setEnabledActions] = useState<Set<number>>(new Set());
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   const handlePreview = () => {
     const url = generateCamPdfBlobUrl(getPdfData());
@@ -447,7 +444,7 @@ const CamReport = () => {
                 <div className="flex items-center gap-2">
                   <FileText className="h-4 w-4 text-primary" />
                   <span className="text-sm font-display text-foreground">CAM Report Preview</span>
-                  <span className="text-[10px] text-muted-foreground font-mono-numbers">— {dataset.companyName}</span>
+                  <span className="text-[10px] text-muted-foreground font-mono-numbers">— {application?.companyName ?? "—"}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <Button

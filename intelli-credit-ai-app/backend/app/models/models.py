@@ -1,6 +1,5 @@
 """
 All 13 SQLAlchemy ORM models for IntelliCredit AI.
-Day 1 deliverable — matches the sprint plan exactly.
 """
 import uuid
 from datetime import datetime
@@ -8,7 +7,6 @@ from sqlalchemy import (
     Column, String, Float, Integer, Boolean,
     DateTime, Text, ForeignKey, JSON, BigInteger
 )
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, declarative_base
 
 Base = declarative_base()
@@ -22,7 +20,7 @@ def gen_uuid():
 class Company(Base):
     __tablename__ = "companies"
 
-    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    id = Column(String(36), primary_key=True, default=gen_uuid)
     cin = Column(String(21), unique=True, nullable=False, index=True)
     name = Column(String(255), nullable=False)
     pan = Column(String(10), nullable=True, index=True)
@@ -39,8 +37,8 @@ class Company(Base):
 class Application(Base):
     __tablename__ = "applications"
 
-    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
-    company_id = Column(UUID(as_uuid=False), ForeignKey("companies.id"), nullable=False)
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    company_id = Column(String(36), ForeignKey("companies.id"), nullable=False)
     loan_amount_requested = Column(Float, nullable=False)          # in ₹ Lakhs
     purpose = Column(String(500), nullable=True)
     status = Column(String(50), default="PENDING")                 # PENDING | PROCESSING | COMPLETED | ERROR
@@ -67,8 +65,8 @@ class Application(Base):
 class Financial(Base):
     __tablename__ = "financials"
 
-    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
-    application_id = Column(UUID(as_uuid=False), ForeignKey("applications.id"), nullable=False)
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    application_id = Column(String(36), ForeignKey("applications.id"), nullable=False)
     year = Column(Integer, nullable=False)                          # e.g. 2024
     revenue = Column(Float, nullable=True)                         # ₹ Lakhs
     ebitda = Column(Float, nullable=True)
@@ -90,8 +88,8 @@ class Financial(Base):
 class Ratio(Base):
     __tablename__ = "ratios"
 
-    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
-    application_id = Column(UUID(as_uuid=False), ForeignKey("applications.id"), nullable=False)
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    application_id = Column(String(36), ForeignKey("applications.id"), nullable=False)
     year = Column(Integer, nullable=False)
     current_ratio = Column(Float, nullable=True)
     quick_ratio = Column(Float, nullable=True)
@@ -118,8 +116,8 @@ class Ratio(Base):
 class RiskScore(Base):
     __tablename__ = "risk_scores"
 
-    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
-    application_id = Column(UUID(as_uuid=False), ForeignKey("applications.id"), nullable=False)
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    application_id = Column(String(36), ForeignKey("applications.id"), nullable=False)
     character = Column(Float, nullable=True)                       # 0–10
     capacity = Column(Float, nullable=True)
     capital = Column(Float, nullable=True)
@@ -145,8 +143,8 @@ class RiskScore(Base):
 class RiskFlag(Base):
     __tablename__ = "risk_flags"
 
-    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
-    application_id = Column(UUID(as_uuid=False), ForeignKey("applications.id"), nullable=False)
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    application_id = Column(String(36), ForeignKey("applications.id"), nullable=False)
     flag_type = Column(String(100), nullable=False)                # e.g. GST_ITR_MISMATCH
     severity = Column(String(20), nullable=False)                  # CRITICAL | HIGH | MEDIUM | LOW
     description = Column(Text, nullable=False)
@@ -161,8 +159,8 @@ class RiskFlag(Base):
 class ResearchData(Base):
     __tablename__ = "research_data"
 
-    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
-    application_id = Column(UUID(as_uuid=False), ForeignKey("applications.id"), nullable=False, unique=True)
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    application_id = Column(String(36), ForeignKey("applications.id"), nullable=False, unique=True)
     promoter_reputation = Column(String(50), nullable=True)        # GOOD | MEDIUM | HIGH_RISK
     litigation_count = Column(Integer, default=0)
     industry_outlook = Column(String(20), nullable=True)           # POSITIVE | NEUTRAL | NEGATIVE
@@ -180,8 +178,8 @@ class ResearchData(Base):
 class DDNote(Base):
     __tablename__ = "dd_notes"
 
-    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
-    application_id = Column(UUID(as_uuid=False), ForeignKey("applications.id"), nullable=False)
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    application_id = Column(String(36), ForeignKey("applications.id"), nullable=False)
     officer_text = Column(Text, nullable=False)
     ai_signals_json = Column(JSON, nullable=True)                  # [{signal_type, description, risk_category, delta, reasoning}]
     risk_delta = Column(Float, default=0.0)
@@ -194,8 +192,8 @@ class DDNote(Base):
 class Document(Base):
     __tablename__ = "documents"
 
-    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
-    application_id = Column(UUID(as_uuid=False), ForeignKey("applications.id"), nullable=False)
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    application_id = Column(String(36), ForeignKey("applications.id"), nullable=False)
     file_path = Column(String(500), nullable=False)                # MinIO object path
     original_filename = Column(String(255), nullable=True)
     doc_type = Column(String(50), nullable=True)                   # GST_RETURN | ITR | ANNUAL_REPORT | etc.
@@ -211,8 +209,8 @@ class Document(Base):
 class CAMReport(Base):
     __tablename__ = "cam_reports"
 
-    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
-    application_id = Column(UUID(as_uuid=False), ForeignKey("applications.id"), nullable=False, unique=True)
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    application_id = Column(String(36), ForeignKey("applications.id"), nullable=False, unique=True)
     pdf_path = Column(String(500), nullable=True)
     docx_path = Column(String(500), nullable=True)
     recommendation = Column(String(50), nullable=True)             # APPROVE | CONDITIONAL | REJECT
@@ -230,8 +228,8 @@ class CAMReport(Base):
 class AgentLog(Base):
     __tablename__ = "agent_logs"
 
-    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
-    application_id = Column(UUID(as_uuid=False), ForeignKey("applications.id"), nullable=False)
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    application_id = Column(String(36), ForeignKey("applications.id"), nullable=False)
     agent_name = Column(String(100), nullable=False)
     status = Column(String(20), nullable=False)                    # STARTED | RUNNING | COMPLETED | ERROR
     input_summary = Column(Text, nullable=True)
@@ -247,8 +245,8 @@ class AgentLog(Base):
 class FieldProvenance(Base):
     __tablename__ = "field_provenance"
 
-    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
-    application_id = Column(UUID(as_uuid=False), ForeignKey("applications.id"), nullable=False)
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    application_id = Column(String(36), ForeignKey("applications.id"), nullable=False)
     field_name = Column(String(100), nullable=False)               # e.g. "revenue_2024"
     field_value = Column(String(500), nullable=True)               # e.g. "12000.0"
     source_document = Column(String(255), nullable=True)           # filename
@@ -265,8 +263,8 @@ class FieldProvenance(Base):
 class BuyerConcentration(Base):
     __tablename__ = "buyer_concentration"
 
-    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
-    application_id = Column(UUID(as_uuid=False), ForeignKey("applications.id"), nullable=False)
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    application_id = Column(String(36), ForeignKey("applications.id"), nullable=False)
     buyer_gstin = Column(String(15), nullable=False)
     buyer_name = Column(String(255), nullable=True)
     invoice_total = Column(Float, nullable=True)                   # ₹ Lakhs

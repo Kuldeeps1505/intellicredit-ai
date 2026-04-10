@@ -1,34 +1,12 @@
 import { useLocation, Link } from "react-router-dom";
 import {
-  LayoutDashboard,
-  Upload,
-  Activity,
-  BarChart3,
-  Users,
-  FileEdit,
-  FileText,
-  Table2,
-  Landmark,
-  ClipboardList,
-  PanelLeftClose,
-  PanelLeft,
-  Play,
+  LayoutDashboard, Upload, Activity, BarChart3, Users, FileEdit,
+  FileText, Table2, Landmark, ClipboardList, PanelLeftClose, PanelLeft,
 } from "lucide-react";
-import { useDataset } from "@/contexts/DatasetContext";
-import { useDemoTour } from "@/contexts/DemoTourContext";
-import { datasets, DatasetId } from "@/lib/demoData";
+import { usePipeline } from "@/contexts/PipelineContext";
 import {
-  Sidebar,
-  SidebarContent,
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarGroupLabel,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-  SidebarFooter,
-  SidebarHeader,
-  useSidebar,
+  Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
+  SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarFooter, SidebarHeader, useSidebar,
 } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -47,9 +25,7 @@ const navItems = [
 
 export function AppSidebar() {
   const location = useLocation();
-  const { activeDataset, setActiveDataset } = useDataset();
   const { state, toggleSidebar } = useSidebar();
-  const { startTour, isActive: tourActive } = useDemoTour();
   const collapsed = state === "collapsed";
 
   return (
@@ -130,88 +106,11 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      {/* Show Demo + Dataset Switcher */}
+      {/* Footer */}
       <SidebarFooter className="border-t border-sidebar-border p-0">
-        {/* Demo Tour Button */}
-        {!collapsed ? (
-          <div className="px-3 pt-3">
-            <button
-              onClick={startTour}
-              disabled={tourActive}
-              className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg bg-primary/10 text-primary text-xs font-display font-semibold hover:bg-primary/20 transition-colors disabled:opacity-50"
-            >
-              <Play className="h-3.5 w-3.5" />
-              Show Demo
-            </button>
-          </div>
-        ) : (
-          <div className="pt-2 flex justify-center">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={startTour}
-                  disabled={tourActive}
-                  className="h-8 w-8 rounded-lg flex items-center justify-center bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
-                >
-                  <Play className="h-3.5 w-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="right">Show Demo</TooltipContent>
-            </Tooltip>
-          </div>
-        )}
-
-        {!collapsed ? (
-          <div className="px-3 py-3">
-            <label className="text-[10px] uppercase tracking-wider text-muted-foreground font-display mb-2 block px-1">
-              Demo Dataset
-            </label>
-            <div className="space-y-1">
-              {datasets.map((ds) => (
-                <button
-                  key={ds.id}
-                  onClick={() => setActiveDataset(ds.id as DatasetId)}
-              className={`w-full text-left px-3 py-2 rounded-md text-xs font-body transition-all flex items-center gap-2 ${
-                    activeDataset === ds.id
-                      ? "bg-sidebar-accent text-sidebar-foreground ring-1 ring-sidebar-primary/40 font-medium"
-                      : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-                  }`}
-                >
-                  <span>{ds.emoji}</span>
-                  <span className="truncate">{ds.label}</span>
-                  <span className="ml-auto font-mono-numbers text-[10px] text-muted-foreground">
-                    {ds.score}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="py-2 flex flex-col items-center gap-1">
-            {datasets.map((ds) => (
-              <Tooltip key={ds.id}>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={() => setActiveDataset(ds.id as DatasetId)}
-                    className={`h-8 w-8 rounded-md flex items-center justify-center text-sm transition-all ${
-                      activeDataset === ds.id
-                        ? "bg-secondary ring-1 ring-primary/40"
-                        : "hover:bg-sidebar-accent/50"
-                    }`}
-                  >
-                    {ds.emoji}
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="right">{ds.label} ({ds.score})</TooltipContent>
-              </Tooltip>
-            ))}
-          </div>
-        )}
-        <div className="px-4 py-2 border-t border-sidebar-border">
+        <div className="px-4 py-3">
           {!collapsed ? (
-            <p className="text-[9px] text-muted-foreground/60 font-body">
-              Powered by India Stack AA · GSTN
-            </p>
+            <p className="text-[9px] text-muted-foreground/60 font-body">Powered by India Stack AA · GSTN</p>
           ) : (
             <div className="h-3" />
           )}

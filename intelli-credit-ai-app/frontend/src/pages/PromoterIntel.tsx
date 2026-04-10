@@ -1,6 +1,7 @@
-import { useState } from "react";
-import { useDataset } from "@/contexts/DatasetContext";
+import { useState, useEffect } from "react";
+import { usePipeline } from "@/contexts/PipelineContext";
 import { getPromoterData, NetworkNode, NetworkEdge } from "@/lib/promoterData";
+import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -26,11 +27,16 @@ const typeIcons: Record<string, string> = {
 };
 
 const PromoterIntel = () => {
-  const { activeDataset } = useDataset();
-  const data = getPromoterData(activeDataset);
+  const { applicationId } = usePipeline();
+  const [data, setData] = useState(getPromoterData("fraud"));
   const [mapExpanded, setMapExpanded] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+
+  useEffect(() => {
+    if (!applicationId) return;
+    api.getPromoter(applicationId).then(setData).catch(() => {});
+  }, [applicationId]);
 
   // Simple force-layout positions for network graph
   const nodePositions = useMemo(() => {

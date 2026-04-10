@@ -21,8 +21,9 @@ class Settings(BaseSettings):
     chroma_host: str = "localhost"
     chroma_port: int = 8001
 
-    # Anthropic
-    anthropic_api_key: str
+    # LLM keys — at least one should be set
+    anthropic_api_key: str = ""
+    gemini_api_key: str = ""
 
     # Sandbox.co.in
     sandbox_api_key: str = ""

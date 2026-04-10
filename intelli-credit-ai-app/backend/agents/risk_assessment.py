@@ -18,7 +18,7 @@ from datetime import datetime
 import anthropic
 
 from app.services.redis_service import get_session, set_session, publish_event
-from app.services.db_helpers import log_agent, _AgentSession
+from app.services.db_helper import log_agent, _AgentSession
 from app.models import RiskScore
 from app.config import settings
 
@@ -241,36 +241,51 @@ def predict_default(features: dict) -> dict:
 def generate_explanation(c_name: str, score: float, context: str) -> str:
     """
     Generate LLM explanation for each C score.
-    Falls back to template if Claude API not available.
+    Tries Anthropic Claude first, then Gemini, then template fallback.
     """
     templates = {
         "character": f"Character score of {score}/10 reflects {context}.",
-        "capacity": f"Capacity score of {score}/10 based on {context}.",
-        "capital": f"Capital score of {score}/10 considering {context}.",
-        "collateral": f"Collateral score of {score}/10 estimated from {context}.",
-        "conditions": f"Conditions score of {score}/10 reflecting {context}.",
+        "capacity":  f"Capacity score of {score}/10 based on {context}.",
+        "capital":   f"Capital score of {score}/10 considering {context}.",
+        "collateral":f"Collateral score of {score}/10 estimated from {context}.",
+        "conditions":f"Conditions score of {score}/10 reflecting {context}.",
     }
-    if not settings.anthropic_api_key:
-        return templates.get(c_name, f"{c_name} score: {score}/10.")
+    prompt = (
+        f"Write a one-sentence credit analyst explanation for a {c_name.upper()} "
+        f"score of {score}/10 in the Five-Cs credit model. "
+        f"Context: {context}. "
+        "Be specific, professional, and mention the key drivers. No preamble."
+    )
 
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    try:
-        resp = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=150,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Write a one-sentence credit analyst explanation for a {c_name.upper()} "
-                    f"score of {score}/10 in the Five-Cs credit model. "
-                    f"Context: {context}. "
-                    "Be specific, professional, and mention the key drivers. No preamble."
-                ),
-            }],
-        )
-        return resp.content[0].text.strip()
-    except Exception:
-        return templates.get(c_name, f"{c_name} score: {score}/10.")
+    # Try Anthropic
+    if settings.anthropic_api_key:
+        try:
+            client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+            resp = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=150,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return resp.content[0].text.strip()
+        except Exception:
+            pass
+
+    # Try Gemini
+    if settings.gemini_api_key:
+        try:
+            import httpx, json as _json
+            resp = httpx.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={settings.gemini_api_key}",
+                json={"contents": [{"parts": [{"text": prompt}]}]},
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+                return text.strip()
+        except Exception:
+            pass
+
+    return templates.get(c_name, f"{c_name} score: {score}/10.")
 
 
 # ── Main entry point ──────────────────────────────────────
@@ -349,13 +364,13 @@ async def run(app_id: str) -> dict:
     char_exp = generate_explanation("character", char_score,
         f"litigation count {litigation_count}, reputation {reputation}, ITC fraud {itc_fraud}")
     cap_exp = generate_explanation("capacity", cap_score,
-        f"DSCR {dscr:.2f if dscr else 'N/A'}, revenue CAGR {revenue_cagr:.1f}%")
+        f"DSCR {round(dscr, 2) if dscr else 'N/A'}, revenue CAGR {revenue_cagr:.1f}%")
     capital_exp = generate_explanation("capital", capital_score,
-        f"D/E ratio {de_ratio:.2f if de_ratio else 'N/A'}, net worth ₹{net_worth:.0f}L")
+        f"D/E ratio {round(de_ratio, 2) if de_ratio else 'N/A'}, net worth Rs.{round(net_worth, 0) if net_worth else 'N/A'}L")
     coll_exp = generate_explanation("collateral", coll_score,
-        f"loan ₹{loan_amount:.0f}L vs net worth ₹{net_worth:.0f}L" if loan_amount and net_worth else "estimate")
+        f"loan Rs.{round(loan_amount, 0) if loan_amount else 'N/A'}L vs net worth Rs.{round(net_worth, 0) if net_worth else 'N/A'}L")
     cond_exp = generate_explanation("conditions", cond_score,
-        f"industry {dossier.get('industry_outlook')}, buyer concentration {buyer_conc_pct:.1f}%")
+        f"industry {dossier.get('industry_outlook', 'NEUTRAL')}, buyer concentration {buyer_conc_pct:.1f}%")
 
     # ── Default prediction ────────────────────────────────
     default_pred = predict_default({

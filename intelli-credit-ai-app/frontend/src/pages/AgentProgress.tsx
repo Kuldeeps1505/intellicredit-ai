@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { useDataset } from "@/contexts/DatasetContext";
-import { agentNodes, getAgentTimings, getDemoLogs, AgentStatus, LogEntry } from "@/lib/agentData";
+import { useState, useEffect, useRef } from "react";
+import { usePipeline } from "@/contexts/PipelineContext";
+import { agentNodes, AgentStatus } from "@/lib/agentData";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -16,119 +16,25 @@ const iconMap: Record<string, React.ElementType> = {
   FileText, BarChart3, ShieldCheck, Zap, Users, Target, FileOutput, GitBranch,
 };
 
-type NodeStatus = Record<string, { status: AgentStatus; elapsed: number }>;
-
 const AgentProgress = () => {
-  const { activeDataset } = useDataset();
-  const timings = getAgentTimings(activeDataset);
-  const allLogs = getDemoLogs(activeDataset);
+  const { 
+    running, 
+    finished, 
+    nodeStates, 
+    visibleLogs, 
+    overallProgress, 
+    riskToasts, 
+    startPipeline,
+    pipelineStatus
+  } = usePipeline();
 
-  const [running, setRunning] = useState(false);
-  const [finished, setFinished] = useState(false);
-  const [nodeStates, setNodeStates] = useState<NodeStatus>({});
-  const [visibleLogs, setVisibleLogs] = useState<LogEntry[]>([]);
-  const [overallProgress, setOverallProgress] = useState(0);
-  const [riskToasts, setRiskToasts] = useState<LogEntry[]>([]);
   const logEndRef = useRef<HTMLDivElement>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Reset on dataset change
-  useEffect(() => {
-    resetPipeline();
-  }, [activeDataset]);
-
-  const resetPipeline = () => {
-    setRunning(false);
-    setFinished(false);
-    setNodeStates({});
-    setVisibleLogs([]);
-    setOverallProgress(0);
-    setRiskToasts([]);
-    if (intervalRef.current) clearInterval(intervalRef.current);
-  };
-
-  const startPipeline = useCallback(() => {
-    resetPipeline();
-    setRunning(true);
-
-    // Build execution order with start times
-    const schedule: { id: string; start: number; end: number }[] = [];
-    let cursor = 0;
-
-    // Sequential groups
-    const groups = [
-      ["doc_parse"],
-      ["fin_spread", "gst_verify"],
-      ["gstr_engine", "buyer_engine"],
-      ["promoter_intel"],
-      ["risk_score"],
-      ["cam_gen"],
-      ["counter_fact"],
-    ];
-
-    groups.forEach((group) => {
-      const maxDur = Math.max(...group.map((id) => timings[id]));
-      group.forEach((id) => {
-        schedule.push({ id, start: cursor, end: cursor + timings[id] });
-      });
-      cursor += maxDur;
-    });
-
-    const totalDuration = cursor;
-    let tick = 0;
-    const TICK_MS = 200; // 200ms per tick, each tick = 0.2s simulated
-
-    const iv = setInterval(() => {
-      tick++;
-      const simTime = tick * 0.2;
-
-      // Update node states
-      const ns: NodeStatus = {};
-      schedule.forEach(({ id, start, end }) => {
-        if (simTime < start) {
-          ns[id] = { status: "idle", elapsed: 0 };
-        } else if (simTime < end) {
-          ns[id] = { status: "running", elapsed: Math.min(simTime - start, timings[id]) };
-        } else {
-          ns[id] = { status: "complete", elapsed: timings[id] };
-        }
-      });
-      setNodeStates(ns);
-
-      // Progress
-      const pct = Math.min(100, (simTime / totalDuration) * 100);
-      setOverallProgress(pct);
-
-      // Reveal logs proportionally
-      const logIdx = Math.floor((simTime / totalDuration) * allLogs.length);
-      setVisibleLogs(allLogs.slice(0, Math.min(logIdx + 1, allLogs.length)));
-
-      // Risk toasts for critical logs
-      const newCritical = allLogs.slice(0, Math.min(logIdx + 1, allLogs.length)).filter((l) => l.level === "critical");
-      setRiskToasts((prev) => {
-        const ids = prev.map((p) => p.timestamp + p.message);
-        const fresh = newCritical.filter((c) => !ids.includes(c.timestamp + c.message));
-        return [...prev, ...fresh].slice(-3);
-      });
-
-      if (simTime >= totalDuration) {
-        clearInterval(iv);
-        setRunning(false);
-        setFinished(true);
-        setOverallProgress(100);
-        setVisibleLogs(allLogs);
-      }
-    }, TICK_MS);
-
-    intervalRef.current = iv;
-  }, [activeDataset, timings, allLogs]);
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [visibleLogs]);
 
-  // Group agents for parallel rendering
-  const renderGroups: { ids: string[]; parallel: boolean }[] = [
+  const renderGroups = [
     { ids: ["doc_parse"], parallel: false },
     { ids: ["fin_spread", "gst_verify"], parallel: true },
     { ids: ["gstr_engine", "buyer_engine"], parallel: true },
@@ -137,15 +43,6 @@ const AgentProgress = () => {
     { ids: ["cam_gen"], parallel: false },
     { ids: ["counter_fact"], parallel: false },
   ];
-
-  const getStatusColor = (status: AgentStatus) => {
-    switch (status) {
-      case "running": return "bg-info";
-      case "complete": return "bg-safe";
-      case "error": return "bg-destructive";
-      default: return "bg-muted";
-    }
-  };
 
   const getStatusIcon = (status: AgentStatus) => {
     switch (status) {
@@ -156,7 +53,7 @@ const AgentProgress = () => {
     }
   };
 
-  const getLogColor = (level: LogEntry["level"]) => {
+  const getLogColor = (level: "info" | "warning" | "critical") => {
     switch (level) {
       case "critical": return "text-destructive";
       case "warning": return "text-warning";
@@ -181,7 +78,6 @@ const AgentProgress = () => {
 
   return (
     <div className="space-y-4">
-      {/* Top progress bar */}
       <div data-tour="agent-progress" className="space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-display text-muted-foreground uppercase tracking-wider">
@@ -206,9 +102,7 @@ const AgentProgress = () => {
         <Progress value={overallProgress} className="h-2" />
       </div>
 
-      {/* Two columns */}
       <div className="grid grid-cols-[340px_1fr] gap-4 h-[calc(100vh-220px)]">
-        {/* Left — Agent Pipeline Graph */}
         <Card data-tour="agent-pipeline" className="p-4 overflow-y-auto">
           <h3 className="text-xs font-display text-muted-foreground uppercase tracking-wider mb-4">
             Agent Pipeline
@@ -216,7 +110,6 @@ const AgentProgress = () => {
           <div className="space-y-0">
             {renderGroups.map((group, gi) => (
               <div key={gi}>
-                {/* Connector line from previous group */}
                 {gi > 0 && (
                   <div className="flex justify-center py-1">
                     <div className={`w-px h-5 ${
@@ -226,14 +119,6 @@ const AgentProgress = () => {
                     }`} />
                   </div>
                 )}
-
-                {/* Branch connector for parallel groups */}
-                {group.parallel && (
-                  <div className="flex justify-center py-0.5">
-                    <div className="w-32 h-px bg-border" />
-                  </div>
-                )}
-
                 <div className={`flex ${group.parallel ? "gap-2 justify-center" : "justify-center"}`}>
                   {group.ids.map((id) => {
                     const node = agentNodes.find((n) => n.id === id)!;
@@ -254,10 +139,7 @@ const AgentProgress = () => {
                             ? "border-destructive bg-destructive/5"
                             : "border-border bg-card"
                         }`}
-                        animate={state.status === "complete" ? { scale: [1, 1.05, 1] } : {}}
-                        transition={{ duration: 0.3 }}
                       >
-                        {/* Node circle */}
                         <div className={`relative flex items-center justify-center w-8 h-8 rounded-full shrink-0 ${
                           state.status === "running"
                             ? "bg-info/20"
@@ -276,8 +158,6 @@ const AgentProgress = () => {
                             }`} />
                           )}
                         </div>
-
-                        {/* Info */}
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1">
                             <span className={`text-xs font-display truncate ${
@@ -285,9 +165,6 @@ const AgentProgress = () => {
                             }`}>
                               {node.shortName}
                             </span>
-                            {node.isEngine && (
-                              <span className="text-[9px] font-display text-primary">⚡NEW</span>
-                            )}
                           </div>
                           <div className="flex items-center gap-1 mt-0.5">
                             {getStatusIcon(state.status)}
@@ -304,19 +181,11 @@ const AgentProgress = () => {
                     );
                   })}
                 </div>
-
-                {/* Merge connector for parallel groups */}
-                {group.parallel && (
-                  <div className="flex justify-center py-0.5">
-                    <div className="w-32 h-px bg-border" />
-                  </div>
-                )}
               </div>
             ))}
           </div>
         </Card>
 
-        {/* Right — Log Stream */}
         <Card data-tour="agent-logs" className="flex flex-col overflow-hidden">
           <div className="px-4 py-3 border-b border-border flex items-center justify-between">
             <h3 className="text-xs font-display text-muted-foreground uppercase tracking-wider">
@@ -356,7 +225,6 @@ const AgentProgress = () => {
         </Card>
       </div>
 
-      {/* Risk Flag Toasts */}
       <div className="fixed bottom-6 right-6 z-50 space-y-2 max-w-sm">
         <AnimatePresence>
           {riskToasts.map((toast, i) => (
