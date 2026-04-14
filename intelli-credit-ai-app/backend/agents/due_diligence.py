@@ -14,10 +14,10 @@ from __future__ import annotations
 import re, json, uuid, time
 from datetime import datetime
 
-import anthropic
+# anthropic removed � using llm_service instead
 
 from app.services.redis_service import get_session, set_session, publish_event
-from app.services.db_helpers import log_agent, _AgentSession
+from app.services.db_helper import log_agent, _AgentSession
 from app.models import DDNote, RiskScore
 from app.config import settings
 
@@ -55,45 +55,36 @@ KEYWORD_MAP = [
 
 
 def parse_observations_with_llm(officer_text: str) -> list[dict]:
-    """Use Claude API to parse observations into structured risk signals."""
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    """Parse DD observations using Ollama → Anthropic → fallback."""
+    from app.services.llm_service import llm_complete_sync
     prompt = f"""You are a senior credit risk analyst at an Indian bank.
-Parse these field observations from a credit officer's site visit and management meeting:
+Parse these field observations from a credit officer's site visit:
 
 \"\"\"{officer_text}\"\"\"
 
-For each distinct observation, output a JSON array of risk signals. Each signal must have:
-- signal_type: short identifier (snake_case, e.g. LOW_CAPACITY_UTILIZATION)
+Output a JSON array of risk signals. Each signal must have:
+- signal_type: short identifier (snake_case)
 - description: what was observed (1 sentence)
 - risk_category: one of OPERATIONAL_EFFICIENCY | MANAGEMENT_TRANSPARENCY | ASSET_QUALITY | COMPLIANCE | MARKET_POSITION
-- risk_points_delta: integer from -10 to +15 (positive = increased risk, negative = reduced risk)
+- risk_points_delta: integer -10 to +15 (positive = increased risk)
 - reasoning: why this matters for credit risk (1 sentence)
 
-Rules:
-- Be precise with deltas: minor issues +2-4, moderate +5-8, serious +9-12, critical +13-15
-- Positive observations can have negative deltas (reduce risk)
-- If no clear observations, return empty array
-
-Respond with ONLY valid JSON array, no markdown, no preamble."""
+Respond with ONLY valid JSON array, no markdown."""
 
     try:
-        resp = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=800,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = resp.content[0].text.strip()
-        # Strip markdown fences if present
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-        signals = json.loads(text)
-        # Validate categories
-        for s in signals:
-            if s.get("risk_category") not in VALID_CATEGORIES:
-                s["risk_category"] = "OPERATIONAL_EFFICIENCY"
-        return signals
+        text = llm_complete_sync(prompt, max_tokens=600,
+                                  system="You are a credit risk analyst. Respond only with valid JSON.")
+        if text:
+            text = re.sub(r"^```(?:json)?\s*", "", text.strip())
+            text = re.sub(r"\s*```$", "", text)
+            signals = json.loads(text)
+            for s in signals:
+                if s.get("risk_category") not in VALID_CATEGORIES:
+                    s["risk_category"] = "OPERATIONAL_EFFICIENCY"
+            return signals
     except Exception:
-        return []
+        pass
+    return []
 
 
 def parse_observations_fallback(officer_text: str) -> list[dict]:
@@ -164,10 +155,9 @@ async def run(app_id: str, officer_text: str) -> dict:
         "timestamp": datetime.utcnow().isoformat(),
     })
 
-    # Parse observations
-    if settings.anthropic_api_key:
-        signals = parse_observations_with_llm(officer_text)
-    else:
+    # Parse observations — always try LLM first, fallback to rules
+    signals = parse_observations_with_llm(officer_text)
+    if not signals:
         signals = parse_observations_fallback(officer_text)
 
     total_delta = sum(s.get("risk_points_delta", 0) for s in signals)

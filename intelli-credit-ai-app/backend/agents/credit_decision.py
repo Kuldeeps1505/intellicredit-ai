@@ -12,7 +12,7 @@ import time, uuid
 from datetime import datetime
 
 from app.services.redis_service import get_session, set_session, publish_event
-from app.services.db_helpers import log_agent, _AgentSession
+from app.services.db_helper import log_agent, _AgentSession
 from app.models import CAMReport, Application, RiskScore, RiskFlag
 from sqlalchemy import select
 

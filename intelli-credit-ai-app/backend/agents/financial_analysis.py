@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 
 from app.services.redis_service import set_session, get_session, publish_event
-from app.services.db_helpers import log_agent, save_risk_flag, _AgentSession
+from app.services.db_helper import log_agent, save_risk_flag, _AgentSession
 from app.models import Financial, Ratio
 
 AGENT = "financial_analysis"

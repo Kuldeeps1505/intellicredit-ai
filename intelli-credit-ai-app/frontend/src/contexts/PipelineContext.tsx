@@ -43,7 +43,7 @@ const STATUS_MAP: Record<string, AgentStatus> = {
   STARTED: "running", RUNNING: "running", COMPLETED: "complete", ERROR: "error",
 };
 
-const POLL_MS = 2000;
+const POLL_MS = 500;
 
 export const PipelineProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [applicationId, setApplicationIdState] = useState<string | null>(null);
@@ -64,7 +64,28 @@ export const PipelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const setApplicationId = useCallback((id: string | null) => {
     setApplicationIdState(id);
     if (id) {
-      api.getApplication(id).then(setApplication).catch(() => {});
+      api.getApplication(id).then((app) => {
+        setApplication(app);
+        // Immediately fetch pipeline status so AgentProgress shows current state
+        api.getPipelineStatus(id).then((statusData) => {
+          const ns: NodeStatus = {};
+          statusData.agents.forEach((a) => {
+            ns[a.id] = { status: STATUS_MAP[a.status] ?? "idle", elapsed: a.duration };
+          });
+          setNodeStates(ns);
+          setOverallProgress(statusData.progress);
+          const logs = statusData.logs.map((l) => ({
+            timestamp: l.timestamp, agent: l.agent, message: l.message,
+            level: l.level as LogEntry["level"],
+          }));
+          setVisibleLogs(logs);
+          if (statusData.progress >= 100) {
+            setFinished(true); setPipelineStatus("completed");
+          } else if (statusData.progress > 0 || app.status === "PROCESSING") {
+            setRunning(true); setPipelineStatus("running");
+          }
+        }).catch(() => {});
+      }).catch(() => {});
     } else {
       setApplication(null);
     }
@@ -186,7 +207,6 @@ export const PipelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     startPolling(id);
     connectWebSocket(id);
   }, [applicationId, resetPipeline, connectWebSocket, startPolling]);
-
   useEffect(() => {
     return () => { wsRef.current?.close(); if (pollRef.current) clearInterval(pollRef.current); };
   }, []);

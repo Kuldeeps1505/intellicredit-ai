@@ -24,6 +24,15 @@ async def delete_session(app_id: str, key: str):
 # ── Pub/Sub (kept for compatibility with existing agent code) ─────────────────
 
 async def publish_event(app_id: str, event: dict):
+    from app.services.event_bus import append_log
+    # If this is a log/progress event, also append to live log state
+    etype = event.get("event_type", "")
+    ts = (event.get("timestamp", ""))[11:19] or "00:00:00"
+    payload = event.get("payload", {})
+    if etype in ("AGENT_PROGRESS", "LOG", "log"):
+        msg = payload.get("message") or str(payload)
+        agent = payload.get("agent_name") or event.get("agent_name", "System")
+        append_log(app_id, ts, agent, msg, "info")
     await _publish(app_id, event)
 
 

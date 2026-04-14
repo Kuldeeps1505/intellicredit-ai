@@ -21,12 +21,15 @@ class Settings(BaseSettings):
     chroma_host: str = "localhost"
     chroma_port: int = 8001
 
-    # LLM keys — at least one should be set
-    anthropic_api_key: str = ""
+    # LLM — Ollama (local) primary, Gemini fallback
+    anthropic_api_key: str = ""   # unused, kept for compat
     gemini_api_key: str = ""
+    ollama_model: str = "mistral"
+    ollama_base_url: str = "http://localhost:11434"
 
     # Sandbox.co.in
     sandbox_api_key: str = ""
+    sandbox_secret_key: str = ""
     sandbox_base_url: str = "https://api.sandbox.co.in"
 
     # Tavily

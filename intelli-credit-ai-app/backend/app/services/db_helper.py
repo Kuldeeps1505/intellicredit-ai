@@ -3,35 +3,23 @@ Shared DB helper functions used by all agents.
 Uses the same engine as the main app to avoid SQLite locking issues.
 """
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
-
-from app.config import settings
+from sqlalchemy import select
 
 
-def _get_session_factory():
-    """Lazy import to avoid circular imports — reuses the main app engine."""
+@asynccontextmanager
+async def _AgentSession():
+    """Yields a DB session using the main app engine (avoids SQLite locking)."""
     from app.database import AsyncSessionLocal
-    return AsyncSessionLocal
-
-
-# Alias for backward compat with agents that import _AgentSession directly
-class _AgentSessionProxy:
-    """Context manager that delegates to the main app session factory."""
-    def __init__(self):
-        self._session = None
-
-    async def __aenter__(self):
-        factory = _get_session_factory()
-        self._session = factory()
-        return await self._session.__aenter__()
-
-    async def __aexit__(self, *args):
-        return await self._session.__aexit__(*args)
-
-
-_AgentSession = _AgentSessionProxy
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
 async def log_agent(
@@ -72,7 +60,6 @@ async def log_agent(
                 duration_ms=duration_ms,
             )
             session.add(log)
-        await session.commit()
 
 
 async def update_app_status(app_id: str, status: str):
@@ -84,11 +71,10 @@ async def update_app_status(app_id: str, status: str):
         if app:
             app.status = status
             app.updated_at = datetime.utcnow()
-            await session.commit()
 
 
 async def save_risk_flag(app_id: str, flag_type: str, severity: str, description: str, agent: str):
-    """Save a risk flag and publish WebSocket event."""
+    """Save a risk flag and publish event."""
     from app.models import RiskFlag
     from app.services.redis_service import publish_event
     async with _AgentSession() as session:
@@ -101,26 +87,17 @@ async def save_risk_flag(app_id: str, flag_type: str, severity: str, description
             detected_by_agent=agent,
         )
         session.add(flag)
-        await session.commit()
 
     await publish_event(app_id, {
         "event_type": "FLAG_DETECTED",
         "agent_name": agent,
-        "payload": {
-            "flag_type": flag_type,
-            "severity": severity,
-            "description": description,
-        },
+        "payload": {"flag_type": flag_type, "severity": severity, "description": description},
         "timestamp": datetime.utcnow().isoformat(),
     })
 
 
 async def save_provenance(app_id: str, records: list[dict]):
-    """
-    Bulk-save field provenance records.
-    records: [{field_name, field_value, source_document, page_number,
-               extraction_method, confidence_score, raw_text_snippet}]
-    """
+    """Bulk-save field provenance records."""
     from app.models import FieldProvenance
     async with _AgentSession() as session:
         for r in records:
@@ -130,4 +107,3 @@ async def save_provenance(app_id: str, records: list[dict]):
                 **r,
             )
             session.add(prov)
-        await session.commit()

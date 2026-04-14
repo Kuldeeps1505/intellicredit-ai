@@ -16,11 +16,11 @@ import uuid
 import json
 from datetime import datetime
 
-import anthropic
+# anthropic removed � using llm_service instead
 import httpx
 
 from app.services.redis_service import get_session, set_session, publish_event
-from app.services.db_helpers import log_agent, save_risk_flag, _AgentSession
+from app.services.db_helper import log_agent, save_risk_flag, _AgentSession
 from app.models import ResearchData
 from app.config import settings
 
@@ -118,58 +118,129 @@ async def web_search(query: str, max_results: int = 5) -> list[dict]:
     return []
 
 
-# ── News sentiment via Claude API ─────────────────────────
+# ── News sentiment via LLM ────────────────────────────────
 async def analyze_news_sentiment(articles: list[dict], company_name: str) -> float:
     """
-    Use Claude API to analyze sentiment of news articles.
+    Analyze sentiment of news articles using Ollama → Anthropic → keyword fallback.
     Returns score from -1.0 (very negative) to +1.0 (very positive).
     """
-    if not articles or not settings.anthropic_api_key:
+    if not articles:
         return 0.0
 
     article_texts = "\n\n".join([
-        f"Title: {a.get('title', '')}\nContent: {a.get('content', '')[:500]}"
+        f"Title: {a.get('title', '')}\nContent: {a.get('content', '')[:300]}"
         for a in articles[:5]
     ])
 
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    from app.services.llm_service import llm_complete
+    prompt = (
+        f"Analyze the sentiment of these news articles about '{company_name}' "
+        "from a credit risk perspective.\n\n"
+        f"{article_texts}\n\n"
+        "Respond with ONLY a JSON object: "
+        '{"score": <float -1.0 to 1.0>, "summary": "<one sentence>"}'
+    )
     try:
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=200,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Analyze the sentiment of these news articles about '{company_name}' "
-                    "from a credit risk perspective.\n\n"
-                    f"{article_texts}\n\n"
-                    "Respond with ONLY a JSON object: "
-                    '{\"score\": <float -1.0 to 1.0>, \"summary\": \"<one sentence>\"}'
-                ),
-            }],
-        )
-        import re, json
-        text = response.content[0].text
-        match = re.search(r'\{.*?\}', text, re.DOTALL)
-        if match:
-            data = json.loads(match.group())
-            return float(data.get("score", 0.0))
+        text = await llm_complete(prompt, max_tokens=150,
+                                   system="You are a credit risk analyst. Respond only with valid JSON.")
+        if text:
+            import re, json
+            match = re.search(r'\{.*?\}', text, re.DOTALL)
+            if match:
+                data = json.loads(match.group())
+                return float(data.get("score", 0.0))
     except Exception:
         pass
+
+    # Keyword fallback
+    all_text = " ".join(a.get("title", "") + " " + a.get("content", "") for a in articles).lower()
+    neg = sum(all_text.count(w) for w in ["fraud", "default", "nclt", "npa", "loss", "penalty", "seized"])
+    pos = sum(all_text.count(w) for w in ["growth", "profit", "award", "expansion", "strong"])
+    if neg > pos: return -0.5
+    if pos > neg: return 0.3
     return 0.0
 
 
-# ── Litigation lookup ─────────────────────────────────────
-def get_litigation(company_name: str, cin: str) -> list[dict]:
-    """
-    Look up litigation cases. Uses mock DB for prototype.
-    In production: eCourts API, NCLT portal, IBBI database.
-    """
-    # Check mock DB by company name keywords
-    for key in MOCK_LITIGATION_DB:
-        if key.lower() in company_name.lower() or company_name.lower() in key.lower():
-            return MOCK_LITIGATION_DB[key]
-    return []
+# ── Zaubacorp scraper (free, no auth) ────────────────────
+async def scrape_zaubacorp(cin: str, company_name: str) -> dict:
+    """Scrape company info from Zaubacorp — free public data."""
+    result = {"directors": [], "status": "unknown", "charges": []}
+    if not cin:
+        return result
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True,
+                                      headers={"User-Agent": "Mozilla/5.0"}) as client:
+            resp = await client.get(f"https://www.zaubacorp.com/company/{cin}")
+            if resp.status_code == 200:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(resp.text, "html.parser")
+                # Extract company status
+                status_el = soup.find(string=lambda t: t and "Active" in t)
+                result["status"] = "Active" if status_el else "Unknown"
+                # Extract directors
+                dir_table = soup.find("table", {"id": "example1"})
+                if dir_table:
+                    for row in dir_table.find_all("tr")[1:6]:  # max 5 directors
+                        cols = row.find_all("td")
+                        if len(cols) >= 2:
+                            result["directors"].append({
+                                "name": cols[0].get_text(strip=True),
+                                "din": cols[1].get_text(strip=True) if len(cols) > 1 else "",
+                                "designation": cols[2].get_text(strip=True) if len(cols) > 2 else "Director",
+                            })
+    except Exception:
+        pass
+    return result
+
+
+# ── eCourts scraper ───────────────────────────────────────
+async def search_ecourts(company_name: str) -> list[dict]:
+    """Search eCourts for cases involving the company."""
+    cases = []
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True,
+                                      headers={"User-Agent": "Mozilla/5.0"}) as client:
+            resp = await client.get(
+                "https://services.ecourts.gov.in/ecourtindiaapi/",
+                params={"party_name": company_name, "state_code": "0", "dist_code": "0"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                for case in data.get("cases", [])[:5]:
+                    cases.append({
+                        "case_id": case.get("case_no", ""),
+                        "court": case.get("court_name", "District Court"),
+                        "type": "CIVIL",
+                        "status": case.get("case_status", "Pending"),
+                        "filed_date": case.get("date_of_filing", ""),
+                        "claim_amount_cr": 0,
+                        "material": True,
+                    })
+    except Exception:
+        pass
+    return cases
+
+
+# ── NCLT/IBBI check via web search ───────────────────────
+async def check_nclt_ibbi(company_name: str, cin: str) -> list[dict]:
+    """Search for NCLT/IBBI insolvency proceedings via Tavily."""
+    results = await web_search(f'"{company_name}" NCLT insolvency petition site:ibbi.gov.in OR site:nclt.gov.in')
+    cases = []
+    for r in results[:3]:
+        title = r.get("title", "").lower()
+        if any(w in title for w in ["nclt", "insolvency", "ibbi", "liquidation"]):
+            cases.append({
+                "case_id": "NCLT/search",
+                "court": "NCLT",
+                "type": "INSOLVENCY",
+                "status": "Pending",
+                "filed_date": "",
+                "claim_amount_cr": 0,
+                "material": True,
+                "source_url": r.get("url", ""),
+                "description": r.get("title", ""),
+            })
+    return cases
 
 
 # ── Promoter reputation scoring ───────────────────────────
@@ -214,18 +285,119 @@ async def save_research(app_id: str, data: dict):
 async def run(app_id: str) -> dict:
     t = time.time()
     await log_agent(app_id, AGENT, "RUNNING")
-    await publish_event(app_id, {
-        "event_type": "AGENT_STARTED",
-        "agent_name": AGENT,
-        "payload": {},
-        "timestamp": datetime.utcnow().isoformat(),
-    })
+    await publish_event(app_id, {"event_type": "AGENT_STARTED", "agent_name": AGENT,
+                                  "payload": {}, "timestamp": datetime.utcnow().isoformat()})
 
-    # Get company info from session
     extracted = await get_session(app_id, "extracted_financials") or {}
     company_name = extracted.get("company_name", "Unknown Company")
-    cin = extracted.get("cin", "")
+    cin  = extracted.get("cin", "")
+    gstin= extracted.get("gstin", "")
     sector = extracted.get("sector", "")
+
+    await publish_event(app_id, {"event_type": "AGENT_PROGRESS", "agent_name": AGENT,
+        "payload": {"message": f"Researching: {company_name} | CIN: {cin}"}, "timestamp": datetime.utcnow().isoformat()})
+
+    # ── 1. Web search (Tavily) ────────────────────────────
+    news_articles = await web_search(f'"{company_name}" fraud NPA default lawsuit India credit')
+    news_sentiment = await analyze_news_sentiment(news_articles, company_name)
+
+    # ── 2. Zaubacorp — director & company data ────────────
+    zauba_data = await scrape_zaubacorp(cin, company_name)
+    directors_from_zauba = zauba_data.get("directors", [])
+
+    # ── 3. eCourts — litigation search ───────────────────
+    ecourt_cases = await search_ecourts(company_name)
+
+    # ── 4. NCLT/IBBI check via Tavily ────────────────────
+    nclt_cases = await check_nclt_ibbi(company_name, cin)
+
+    # Merge litigation sources
+    litigation_cases = ecourt_cases + nclt_cases
+    # Also check mock DB as fallback
+    if not litigation_cases:
+        for key in MOCK_LITIGATION_DB:
+            if key.lower() in company_name.lower():
+                litigation_cases = MOCK_LITIGATION_DB[key]
+                break
+
+    # ── 5. NPA check via web search ──────────────────────
+    npa_results = await web_search(f'"{company_name}" NPA "non performing asset" bank')
+    npa_linked = any("npa" in r.get("title","").lower() or "non performing" in r.get("content","").lower()
+                     for r in npa_results)
+
+    # ── 6. Industry outlook ───────────────────────────────
+    sector_key = sector.upper().replace(" ", "_").replace("/", "_")
+    sector_data = SECTOR_OUTLOOK.get(sector_key, None)
+    if not sector_data:
+        # Try partial match
+        for k, v in SECTOR_OUTLOOK.items():
+            if k in sector_key or sector_key in k:
+                sector_data = v
+                break
+    if not sector_data:
+        sector_data = {"outlook": "NEUTRAL", "score": 5, "note": f"Sector '{sector}' not mapped."}
+
+    # ── 7. Promoter reputation ────────────────────────────
+    reputation = score_promoter_reputation(litigation_cases, news_sentiment, npa_linked)
+
+    dossier = {
+        "company_name": company_name,
+        "cin": cin,
+        "promoter_reputation": reputation,
+        "litigation_count": len(litigation_cases),
+        "litigation_cases": litigation_cases,
+        "industry_outlook": sector_data["outlook"],
+        "industry_score": sector_data["score"],
+        "industry_note": sector_data.get("note", ""),
+        "news_sentiment_score": round(news_sentiment, 3),
+        "news_articles": [{"title": a.get("title"), "url": a.get("url"),
+                           "snippet": a.get("content", "")[:200]} for a in news_articles[:5]],
+        "directors": directors_from_zauba,
+        "npa_linked": npa_linked,
+        "zauba_status": zauba_data.get("status", "unknown"),
+    }
+
+    # ── Risk flags ────────────────────────────────────────
+    material_lit = [c for c in litigation_cases if c.get("material")]
+    if material_lit:
+        nclt_found = [c for c in material_lit if "NCLT" in c.get("court", "")]
+        if nclt_found:
+            await save_risk_flag(app_id, "NCLT_LITIGATION", "CRITICAL",
+                f"{len(nclt_found)} active NCLT insolvency petition(s). "
+                f"Largest: ₹{max(c.get('claim_amount_cr',0) for c in nclt_found):.1f}Cr.", AGENT)
+        else:
+            await save_risk_flag(app_id, "MATERIAL_LITIGATION", "HIGH",
+                f"{len(material_lit)} material litigation case(s) totalling "
+                f"₹{sum(c.get('claim_amount_cr',0) for c in material_lit):.1f}Cr.", AGENT)
+
+    if npa_linked:
+        await save_risk_flag(app_id, "NPA_LINKED", "CRITICAL",
+            f"Company or promoters linked to NPA accounts per web search.", AGENT)
+
+    if sector_data["outlook"] == "NEGATIVE":
+        await save_risk_flag(app_id, "NEGATIVE_SECTOR_OUTLOOK", "MEDIUM",
+            f"Sector '{sector}' has NEGATIVE outlook. {sector_data.get('note','')}", AGENT)
+
+    await save_research(app_id, {
+        "promoter_reputation": reputation,
+        "litigation_count": len(litigation_cases),
+        "industry_outlook": sector_data["outlook"],
+        "news_sentiment_score": news_sentiment,
+        "litigation_cases": litigation_cases,
+        "news_articles": dossier["news_articles"],
+        "directorship_history": directors_from_zauba,
+        "raw_json": dossier,
+    })
+    await set_session(app_id, "research_dossier", dossier)
+
+    duration_ms = int((time.time() - t) * 1000)
+    summary = (f"Reputation: {reputation} | Litigation: {len(litigation_cases)} cases | "
+               f"Industry: {sector_data['outlook']} | News sentiment: {news_sentiment:.2f} | "
+               f"NPA linked: {npa_linked} | Directors from Zaubacorp: {len(directors_from_zauba)}")
+    await log_agent(app_id, AGENT, "COMPLETED", output_summary=summary, duration_ms=duration_ms)
+    await publish_event(app_id, {"event_type": "AGENT_COMPLETED", "agent_name": AGENT,
+        "payload": {"summary": summary, "duration_ms": duration_ms}, "timestamp": datetime.utcnow().isoformat()})
+    return dossier
 
     await publish_event(app_id, {
         "event_type": "AGENT_PROGRESS",

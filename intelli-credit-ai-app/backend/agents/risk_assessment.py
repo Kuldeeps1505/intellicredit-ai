@@ -10,12 +10,8 @@ Computes:
   - LLM-written explanation per C
 """
 from __future__ import annotations
-import time
-import uuid
-import math
+import time, uuid, math, asyncio
 from datetime import datetime
-
-import anthropic
 
 from app.services.redis_service import get_session, set_session, publish_event
 from app.services.db_helper import log_agent, _AgentSession
@@ -239,10 +235,7 @@ def predict_default(features: dict) -> dict:
 
 # ── LLM explanation generator ─────────────────────────────
 def generate_explanation(c_name: str, score: float, context: str) -> str:
-    """
-    Generate LLM explanation for each C score.
-    Tries Anthropic Claude first, then Gemini, then template fallback.
-    """
+    """Template-based explanation — fast, no LLM blocking."""
     templates = {
         "character": f"Character score of {score}/10 reflects {context}.",
         "capacity":  f"Capacity score of {score}/10 based on {context}.",
@@ -250,42 +243,20 @@ def generate_explanation(c_name: str, score: float, context: str) -> str:
         "collateral":f"Collateral score of {score}/10 estimated from {context}.",
         "conditions":f"Conditions score of {score}/10 reflecting {context}.",
     }
+    return templates.get(c_name, f"{c_name} score: {score}/10.")
+
+
+async def generate_explanation_async(c_name: str, score: float, context: str) -> str:
+    """Async LLM explanation — Gemini via llm_service."""
+    from app.services.llm_service import llm_complete
     prompt = (
         f"Write a one-sentence credit analyst explanation for a {c_name.upper()} "
-        f"score of {score}/10 in the Five-Cs credit model. "
-        f"Context: {context}. "
-        "Be specific, professional, and mention the key drivers. No preamble."
+        f"score of {score}/10 in the Five-Cs credit model. Context: {context}. "
+        "Be specific, professional, mention key drivers. No preamble, no markdown."
     )
-
-    # Try Anthropic
-    if settings.anthropic_api_key:
-        try:
-            client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-            resp = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=150,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return resp.content[0].text.strip()
-        except Exception:
-            pass
-
-    # Try Gemini
-    if settings.gemini_api_key:
-        try:
-            import httpx, json as _json
-            resp = httpx.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={settings.gemini_api_key}",
-                json={"contents": [{"parts": [{"text": prompt}]}]},
-                timeout=15,
-            )
-            if resp.status_code == 200:
-                text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-                return text.strip()
-        except Exception:
-            pass
-
-    return templates.get(c_name, f"{c_name} score: {score}/10.")
+    result = await llm_complete(prompt, max_tokens=120,
+                                system="You are a senior credit risk analyst at an Indian bank.")
+    return result or generate_explanation(c_name, score, context)
 
 
 # ── Main entry point ──────────────────────────────────────
@@ -360,17 +331,26 @@ async def run(app_id: str) -> dict:
             risk_category, decision = cat, dec
             break
 
-    # ── Generate explanations ─────────────────────────────
-    char_exp = generate_explanation("character", char_score,
-        f"litigation count {litigation_count}, reputation {reputation}, ITC fraud {itc_fraud}")
-    cap_exp = generate_explanation("capacity", cap_score,
-        f"DSCR {round(dscr, 2) if dscr else 'N/A'}, revenue CAGR {revenue_cagr:.1f}%")
-    capital_exp = generate_explanation("capital", capital_score,
-        f"D/E ratio {round(de_ratio, 2) if de_ratio else 'N/A'}, net worth Rs.{round(net_worth, 0) if net_worth else 'N/A'}L")
-    coll_exp = generate_explanation("collateral", coll_score,
-        f"loan Rs.{round(loan_amount, 0) if loan_amount else 'N/A'}L vs net worth Rs.{round(net_worth, 0) if net_worth else 'N/A'}L")
-    cond_exp = generate_explanation("conditions", cond_score,
-        f"industry {dossier.get('industry_outlook', 'NEUTRAL')}, buyer concentration {buyer_conc_pct:.1f}%")
+    # ── Generate explanations (async Gemini with timeout) ────────────────
+    async def _safe_explain(c_name, score, context):
+        try:
+            return await asyncio.wait_for(
+                generate_explanation_async(c_name, score, context), timeout=8.0)
+        except Exception:
+            return generate_explanation(c_name, score, context)
+
+    char_exp, cap_exp, capital_exp, coll_exp, cond_exp = await asyncio.gather(
+        _safe_explain("character", char_score,
+            f"litigation count {litigation_count}, reputation {reputation}, ITC fraud {itc_fraud}"),
+        _safe_explain("capacity", cap_score,
+            f"DSCR {round(dscr, 2) if dscr else 'N/A'}, revenue CAGR {revenue_cagr:.1f}%"),
+        _safe_explain("capital", capital_score,
+            f"D/E ratio {round(de_ratio, 2) if de_ratio else 'N/A'}, net worth Rs.{round(net_worth, 0) if net_worth else 'N/A'}L"),
+        _safe_explain("collateral", coll_score,
+            f"loan Rs.{round(loan_amount, 0) if loan_amount else 'N/A'}L vs net worth Rs.{round(net_worth, 0) if net_worth else 'N/A'}L"),
+        _safe_explain("conditions", cond_score,
+            f"industry {dossier.get('industry_outlook', 'NEUTRAL')}, buyer concentration {buyer_conc_pct:.1f}%"),
+    )
 
     # ── Default prediction ────────────────────────────────
     default_pred = predict_default({

@@ -13,11 +13,10 @@ alembic==1.13.1
 aiosqlite==0.20.0
 
 # ── AI / LLM ──────────────────────────────────────────────────────────────
-# Gemini (primary — key in .env)
-langchain-google-genai==4.2.1
-google-generativeai==0.8.3
+# Ollama (local, free — run: ollama pull mistral)
+ollama==0.4.7
 
-# Anthropic (optional fallback)
+# Anthropic (optional fallback — set ANTHROPIC_API_KEY in .env)
 # anthropic==0.28.0
 
 # Agent orchestration
@@ -35,6 +34,7 @@ python-docx==1.1.2
 
 # ── Research ──────────────────────────────────────────────────────────────
 httpx==0.28.1
+beautifulsoup4==4.12.3
 
 # ── Graph ─────────────────────────────────────────────────────────────────
 networkx==3.3

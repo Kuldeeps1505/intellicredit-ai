@@ -31,22 +31,58 @@ const difficultyConfig = {
 
 const CamReport = () => {
   const { applicationId, application } = usePipeline();
-  const [data, setData] = useState(getCamData("fraud"));
-  const [riskData, setRiskData] = useState(getRiskData("fraud"));
-  const dec = decisionConfig[data.recommendation.decision] ?? decisionConfig.conditional;
+
+  // Use `any` to avoid type mismatch between static fallback and live API types
+  const [data, setData] = useState<any>(getCamData("fraud"));
+  const [riskData, setRiskData] = useState<any>(getRiskData("fraud"));
+  const [loading, setLoading] = useState(false);
+  const [promoterData, setPromoterData] = useState<any>(null);
+  const [financialData, setFinancialData] = useState<any>(null);
+  const [bankData, setBankData] = useState<any>(null);
+  const [diligenceData, setDiligenceData] = useState<any>(null);
+
+  // Derive decision from live data (may differ from fallback)
+  const decision = (data?.recommendation?.decision ?? "conditional") as keyof typeof decisionConfig;
+  const dec = decisionConfig[decision] ?? decisionConfig.conditional;
   const DecIcon = dec.icon;
+
+  // Derive gauge values — always use riskData (from /risk endpoint) as source of truth
+  const gaugeScore    = (riskData?.score ?? 0) as number;
+  const gaugeCategory = (riskData?.riskCategory ?? (gaugeScore >= 70 ? "LOW" : gaugeScore >= 50 ? "MEDIUM" : "HIGH")) as string;
+  const gaugePd12     = (riskData?.defaultProb12m ?? 0) as number;
+  const gaugePd24     = (riskData?.defaultProb24m ?? 0) as number;
 
   useEffect(() => {
     if (!applicationId) return;
-    api.getCam(applicationId).then(setData).catch(() => {});
-    api.getRisk(applicationId).then(setRiskData).catch(() => {});
+    setLoading(true);
+    Promise.allSettled([
+      api.getCam(applicationId).then((d) => setData(d)),
+      api.getRisk(applicationId).then((r) => setRiskData(r)),
+      api.getPromoter(applicationId).then(setPromoterData).catch(() => {}),
+      api.getFinancials(applicationId).then(setFinancialData).catch(() => {}),
+      api.getBankAnalytics(applicationId).then(setBankData).catch(() => {}),
+      api.getDiligence(applicationId).then(setDiligenceData).catch(() => {}),
+    ]).finally(() => setLoading(false));
   }, [applicationId]);
 
   const getPdfData = () => ({
     camData: data,
-    dataset: { companyName: application?.companyName ?? "—", cin: application?.cin ?? "—", pan: application?.pan ?? "—", gstin: application?.gstin ?? "—", loanAmount: application?.loanAmount ?? "—", purpose: application?.purpose ?? "—", sector: application?.sector ?? "—", id: "approve" as const, label: "Live", emoji: "📄", score: riskData.score },
+    dataset: {
+      companyName: application?.companyName ?? "—",
+      cin: application?.cin ?? "—",
+      pan: application?.pan ?? "—",
+      gstin: application?.gstin ?? "—",
+      loanAmount: application?.loanAmount ?? "—",
+      purpose: application?.purpose ?? "—",
+      sector: application?.sector ?? "—",
+      id: "approve" as const, label: "Live", emoji: "📄", score: gaugeScore,
+    },
     riskData,
-    promoterData: null, financialData: null, bankData: null, diligenceData: null, facilityData: null,
+    promoterData,
+    financialData,
+    bankData,
+    diligenceData,
+    facilityData: null,
   });
 
   const [enabledActions, setEnabledActions] = useState<Set<number>>(new Set());
@@ -72,18 +108,17 @@ const CamReport = () => {
   };
 
   const simulatedScore = useMemo(() => {
-    const base = riskData.score;
     let bonus = 0;
     enabledActions.forEach((idx) => {
-      const cf = data.counterfactuals[idx];
-      if (cf) bonus += cf.scoreImpact;
+      const cf = data?.counterfactuals?.[idx];
+      if (cf) bonus += (cf.scoreImpact || 0);
     });
-    return Math.min(100, base + bonus);
-  }, [enabledActions, riskData.score, data.counterfactuals]);
+    return Math.min(100, gaugeScore + bonus);
+  }, [enabledActions, gaugeScore, data?.counterfactuals]);
 
   const maxPossibleScore = useMemo(() => {
-    return Math.min(100, riskData.score + data.counterfactuals.reduce((sum, cf) => sum + cf.scoreImpact, 0));
-  }, [riskData.score, data.counterfactuals]);
+    return Math.min(100, gaugeScore + (data?.counterfactuals || []).reduce((sum: number, cf: any) => sum + (cf.scoreImpact || 0), 0));
+  }, [gaugeScore, data?.counterfactuals]);
 
   const scoreChanged = enabledActions.size > 0;
 
@@ -134,7 +169,24 @@ const CamReport = () => {
           <Card className="p-4">
             <h3 className="text-xs font-display text-muted-foreground uppercase tracking-wider mb-3">Key Metrics Summary</h3>
             <div className="grid grid-cols-3 gap-2">
-              {data.keyMetrics.map((m, i) => (
+              {(data.keyMetrics || []).map((m: any, i: number) => {
+                // Always override Risk Score and Default Prob with live riskData values
+                let displayValue = m.value;
+                let displayStatus = m.status;
+                if (m.label === "Risk Score" && gaugeScore > 0) {
+                  displayValue = `${gaugeScore.toFixed(1)}/100`;
+                  displayStatus = gaugeScore >= 70 ? "good" : gaugeScore >= 50 ? "warning" : "danger";
+                }
+                if (m.label === "Default Prob 12m" && gaugePd12 > 0) {
+                  displayValue = `${gaugePd12.toFixed(1)}%`;
+                  displayStatus = gaugePd12 < 5 ? "good" : gaugePd12 < 15 ? "warning" : "danger";
+                }
+                if (m.label === "Decision" && riskData?.decision) {
+                  const d = String(riskData.decision).replace("CONDITIONAL_APPROVAL","CONDITIONAL").toUpperCase();
+                  displayValue = d;
+                  displayStatus = d === "APPROVE" ? "good" : d === "CONDITIONAL" ? "warning" : "danger";
+                }
+                return (
                 <motion.div
                   key={m.label}
                   initial={{ opacity: 0, y: 8 }}
@@ -144,20 +196,21 @@ const CamReport = () => {
                 >
                   <p className="text-[10px] text-muted-foreground">{m.label}</p>
                   <p className={`text-sm font-mono-numbers font-bold ${
-                    m.status === "good" ? "text-safe" : m.status === "warning" ? "text-warning" : "text-destructive"
+                    displayStatus === "good" ? "text-safe" : displayStatus === "warning" ? "text-warning" : "text-destructive"
                   }`}>
-                    {m.value}
+                    {displayValue}
                   </p>
                 </motion.div>
-              ))}
+                );
+              })}
             </div>
           </Card>
           <Card className="p-3 flex items-center justify-center">
             <RiskGauge
-              score={riskData.score}
-              category={riskData.riskCategory}
-              defaultProb12m={riskData.defaultProb12m}
-              defaultProb24m={riskData.defaultProb24m}
+              score={gaugeScore}
+              category={gaugeCategory}
+              defaultProb12m={gaugePd12}
+              defaultProb24m={gaugePd24}
             />
           </Card>
         </div>
@@ -222,7 +275,7 @@ const CamReport = () => {
               <div key={key} className="flex items-center justify-between py-2 border-b border-border/50 last:border-0">
                 <span className="text-[10px] text-muted-foreground font-display capitalize">{key.replace(/([A-Z])/g, " $1")}</span>
                 <span className={`text-xs font-mono-numbers ${value === "NOT APPLICABLE" ? "text-destructive" : "text-foreground"}`}>
-                  {value}
+                  {String(value)}
                 </span>
               </div>
             ))}
@@ -325,8 +378,8 @@ const CamReport = () => {
                       strokeWidth="2.5"
                       strokeLinecap="round"
                       strokeDasharray="100"
-                      initial={{ strokeDashoffset: 100 - riskData.score }}
-                      animate={{ strokeDashoffset: 100 - riskData.score }}
+                      initial={{ strokeDashoffset: 100 - gaugeScore }}
+                      animate={{ strokeDashoffset: 100 - gaugeScore }}
                       opacity={0.3}
                     />
                     {/* Simulated score arc */}
@@ -341,7 +394,7 @@ const CamReport = () => {
                       strokeWidth="2.5"
                       strokeLinecap="round"
                       strokeDasharray="100"
-                      initial={{ strokeDashoffset: 100 - riskData.score }}
+                      initial={{ strokeDashoffset: 100 - gaugeScore }}
                       animate={{ strokeDashoffset: 100 - simulatedScore }}
                       transition={{ type: "spring", stiffness: 60, damping: 15 }}
                     />
@@ -373,7 +426,7 @@ const CamReport = () => {
                     >
                       <TrendingUp className="h-3.5 w-3.5 text-safe" />
                       <span className="text-sm font-mono-numbers font-bold text-safe">
-                        +{simulatedScore - riskData.score}
+                        +{simulatedScore - gaugeScore}
                       </span>
                       <span className="text-[9px] text-muted-foreground">points</span>
                     </motion.div>
@@ -399,7 +452,7 @@ const CamReport = () => {
                 {/* Progress toward max */}
                 <div className="w-full mt-4 px-2">
                   <div className="flex justify-between text-[8px] text-muted-foreground font-mono-numbers mb-1">
-                    <span>Current: {riskData.score}</span>
+                    <span>Current: {gaugeScore}</span>
                     <span>Max: {maxPossibleScore}</span>
                   </div>
                   <div className="w-full h-1.5 bg-border rounded-full overflow-hidden">

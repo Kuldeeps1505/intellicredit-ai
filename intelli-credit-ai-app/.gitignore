@@ -32,6 +32,9 @@ backend/.env
 # ── Local file storage (MinIO fallback) ──────────────────
 backend/local_uploads/
 
+# ── Pipeline state (ephemeral, per-run) ──────────────────
+backend/pipeline_state/
+
 # ── Test artifacts ────────────────────────────────────────
 # Keep test_documents/ in repo for demo purposes
 # backend/test_documents/   ← intentionally NOT ignored

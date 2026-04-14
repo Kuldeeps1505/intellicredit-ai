@@ -21,7 +21,7 @@ from datetime import datetime
 from collections import defaultdict
 
 from app.services.redis_service import get_session, set_session, publish_event
-from app.services.db_helpers import log_agent, save_risk_flag, _AgentSession
+from app.services.db_helper import log_agent, save_risk_flag, _AgentSession
 from app.models import BuyerConcentration
 from app.config import settings
 
@@ -31,29 +31,26 @@ TOP3_THRESHOLD = 60.0            # % — high risk if top 3 > this
 
 
 async def fetch_gstr1_invoices(gstin: str, financial_year: str) -> list[dict]:
-    """
-    Fetch GSTR-1 B2B invoice data from Sandbox.co.in.
-    Each invoice: {buyer_gstin, invoice_value, invoice_date, ...}
-    """
+    """Fetch GSTR-1 B2B invoice data from Sandbox.co.in."""
     if not settings.sandbox_api_key:
-        # Mock GSTR-1 data — realistic for demo Dataset 2 (71% concentration)
-        return [
-            {"buyer_gstin": "29AAABC1234D1Z5", "buyer_name": "Alpha Traders Pvt Ltd", "invoice_total": 6745.0},
-            {"buyer_gstin": "27BBBCD5678E2Z6", "buyer_name": "Beta Distributors Ltd", "invoice_total": 1124.0},
-            {"buyer_gstin": "24CCCDE9012F3Z7", "buyer_name": "Gamma Exports", "invoice_total": 876.0},
-            {"buyer_gstin": "33DDDEF3456G4Z8", "buyer_name": "Delta Retail Chain", "invoice_total": 542.0},
-            {"buyer_gstin": "07EEEFG7890H5Z9", "buyer_name": "Epsilon Wholesale", "invoice_total": 213.0},
-        ]
+        return []  # No fallback — return empty, caller handles it
+
+    headers = {
+        "x-api-key": settings.sandbox_api_key,
+        "x-api-secret": getattr(settings, "sandbox_secret_key", ""),
+        "x-api-version": "1.0",
+        "Content-Type": "application/json",
+    }
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
                 f"{settings.sandbox_base_url}/gsp/gstr1/b2b",
-                headers={"x-api-key": settings.sandbox_api_key},
+                headers=headers,
                 params={"gstin": gstin, "financial_year": financial_year},
             )
             if resp.status_code == 200:
                 data = resp.json()
-                return data.get("invoices", [])
+                return data.get("invoices", data.get("b2b", []))
     except Exception:
         pass
     return []
