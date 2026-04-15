@@ -224,23 +224,104 @@ async def search_ecourts(company_name: str) -> list[dict]:
 # ── NCLT/IBBI check via web search ───────────────────────
 async def check_nclt_ibbi(company_name: str, cin: str) -> list[dict]:
     """Search for NCLT/IBBI insolvency proceedings via Tavily."""
-    results = await web_search(f'"{company_name}" NCLT insolvency petition site:ibbi.gov.in OR site:nclt.gov.in')
+    results = await web_search(
+        f'"{company_name}" NCLT insolvency petition site:ibbi.gov.in OR site:nclt.gov.in'
+    )
     cases = []
     for r in results[:3]:
-        title = r.get("title", "").lower()
-        if any(w in title for w in ["nclt", "insolvency", "ibbi", "liquidation"]):
+        combined = (r.get("title", "") + r.get("content", "")).lower()
+        if any(w in combined for w in ["nclt", "insolvency", "ibbi", "liquidation"]):
             cases.append({
                 "case_id": "NCLT/search",
                 "court": "NCLT",
                 "type": "INSOLVENCY",
                 "status": "Pending",
                 "filed_date": "",
-                "claim_amount_cr": 0,
+                "claim_amount_cr": _extract_amount_cr(r.get("content", "")),
                 "material": True,
                 "source_url": r.get("url", ""),
                 "description": r.get("title", ""),
             })
     return cases
+    """
+    Check if a director (by DIN + name) is linked to NPA accounts.
+    Uses Tavily to search RBI defaulter list, CIBIL, news.
+    Returns: { npa_links: int, shell_links: int, npa_entries: [...], flags: [...] }
+    """
+    npa_entries = []
+    flags = []
+    npa_links = 0
+    shell_links = 0
+
+    if not settings.tavily_api_key:
+        return {"npa_links": 0, "shell_links": 0, "npa_entries": [], "flags": []}
+
+    # Search 1: Director name + NPA/default
+    results = await web_search(
+        f'"{director_name}" DIN {din} NPA "non performing" bank default India',
+        max_results=5
+    )
+    for r in results:
+        title = r.get("title", "").lower()
+        content = r.get("content", "").lower()
+        combined = title + " " + content
+        if any(w in combined for w in ["npa", "non performing", "default", "wilful defaulter", "cibil"]):
+            npa_links += 1
+            # Try to extract company name and amount from snippet
+            npa_entries.append({
+                "din": din,
+                "company_name": _extract_company_from_snippet(r.get("title", ""), company_name),
+                "amount_cr": _extract_amount_cr(r.get("content", "")),
+                "source": r.get("url", ""),
+                "description": r.get("title", "")[:100],
+            })
+            flags.append(f"Director {director_name} (DIN: {din}) linked to NPA — {r.get('title','')[:60]}")
+
+    # Search 2: Director + shell company / SFIO / ED
+    shell_results = await web_search(
+        f'"{director_name}" DIN {din} "shell company" OR "SFIO" OR "Enforcement Directorate" India',
+        max_results=3
+    )
+    for r in shell_results:
+        combined = (r.get("title", "") + r.get("content", "")).lower()
+        if any(w in combined for w in ["shell", "sfio", "enforcement directorate", "money laundering"]):
+            shell_links += 1
+            flags.append(f"Director {director_name} linked to shell company / SFIO — {r.get('title','')[:60]}")
+
+    # Search 3: NCLT petition against company
+    nclt_results = await web_search(
+        f'"{company_name}" NCLT insolvency petition "section 7" OR "section 9" India',
+        max_results=3
+    )
+    for r in nclt_results:
+        combined = (r.get("title", "") + r.get("content", "")).lower()
+        if "nclt" in combined or "insolvency" in combined:
+            flags.append(f"NCLT petition found — {r.get('title','')[:60]}")
+
+    return {
+        "npa_links": npa_links,
+        "shell_links": shell_links,
+        "npa_entries": npa_entries[:3],  # cap at 3 per director
+        "flags": flags,
+    }
+
+
+def _extract_company_from_snippet(title: str, fallback: str) -> str:
+    """Try to extract a company name from a news title."""
+    # Look for patterns like "XYZ Ltd" or "ABC Pvt Ltd"
+    import re
+    match = re.search(r'([A-Z][A-Za-z\s]+(?:Ltd|Limited|Pvt|Corp|Industries|Exports|Trading))', title)
+    return match.group(1).strip() if match else fallback
+
+
+def _extract_amount_cr(text: str) -> float:
+    """Extract crore amount from text."""
+    import re
+    # Match patterns like "Rs.4.2 Cr" or "₹18 crore" or "4.2 crores"
+    match = re.search(r'(?:rs\.?|₹)?\s*(\d+\.?\d*)\s*(?:crore|cr)', text.lower())
+    if match:
+        return float(match.group(1))
+    return 0.0
 
 
 # ── Promoter reputation scoring ───────────────────────────
@@ -313,17 +394,43 @@ async def run(app_id: str) -> dict:
 
     # Merge litigation sources
     litigation_cases = ecourt_cases + nclt_cases
-    # Also check mock DB as fallback
     if not litigation_cases:
         for key in MOCK_LITIGATION_DB:
             if key.lower() in company_name.lower():
                 litigation_cases = MOCK_LITIGATION_DB[key]
                 break
 
-    # ── 5. NPA check via web search ──────────────────────
+    # ── 5. NPA check per director (real Tavily) ───────────
+    all_npa_entries = []
+    all_fraud_flags = []
+    enriched_directors = []
+    for d in directors_from_zauba:
+        din  = d.get("din", "")
+        name = d.get("name", "")
+        if din and name and settings.tavily_api_key:
+            npa_result = await check_director_npa(name, din, company_name)
+            d["npa_links"]   = npa_result["npa_links"]
+            d["shell_links"] = npa_result["shell_links"]
+            all_npa_entries.extend(npa_result["npa_entries"])
+            all_fraud_flags.extend(npa_result["flags"])
+        enriched_directors.append(d)
+
+    # Write fraud_network session — consumed by promoter router to build graph
+    await set_session(app_id, "fraud_network", {
+        "directors":   enriched_directors,
+        "npa_entries": all_npa_entries,
+        "mca21_flags": all_fraud_flags[:5],
+        "source":      "zaubacorp+tavily",
+        "scraped_at":  datetime.utcnow().isoformat(),
+    })
+
+    # ── 5b. Company-level NPA check ───────────────────────
     npa_results = await web_search(f'"{company_name}" NPA "non performing asset" bank')
-    npa_linked = any("npa" in r.get("title","").lower() or "non performing" in r.get("content","").lower()
-                     for r in npa_results)
+    npa_linked = (
+        any("npa" in r.get("title","").lower() or "non performing" in r.get("content","").lower()
+            for r in npa_results)
+        or len(all_npa_entries) > 0
+    )
 
     # ── 6. Industry outlook ───────────────────────────────
     sector_key = sector.upper().replace(" ", "_").replace("/", "_")
@@ -352,7 +459,7 @@ async def run(app_id: str) -> dict:
         "news_sentiment_score": round(news_sentiment, 3),
         "news_articles": [{"title": a.get("title"), "url": a.get("url"),
                            "snippet": a.get("content", "")[:200]} for a in news_articles[:5]],
-        "directors": directors_from_zauba,
+        "directors": enriched_directors if enriched_directors else directors_from_zauba,
         "npa_linked": npa_linked,
         "zauba_status": zauba_data.get("status", "unknown"),
     }
@@ -495,3 +602,54 @@ async def run(app_id: str) -> dict:
     })
 
     return dossier
+
+
+async def check_director_npa(director_name: str, din: str, company_name: str) -> dict:
+    """
+    Check if a director is linked to NPA accounts via Tavily search.
+    Searches: RBI defaulter list mentions, CIBIL, news, SFIO/ED.
+    Returns: { npa_links, shell_links, npa_entries, flags }
+    """
+    npa_entries = []
+    flags = []
+    npa_links = 0
+    shell_links = 0
+
+    if not settings.tavily_api_key:
+        return {"npa_links": 0, "shell_links": 0, "npa_entries": [], "flags": []}
+
+    # Search 1: Director + NPA/default
+    results = await web_search(
+        f'"{director_name}" DIN {din} NPA "non performing" bank default India',
+        max_results=5
+    )
+    for r in results:
+        combined = (r.get("title", "") + " " + r.get("content", "")).lower()
+        if any(w in combined for w in ["npa", "non performing", "default", "wilful defaulter"]):
+            npa_links += 1
+            npa_entries.append({
+                "din": din,
+                "company_name": _extract_company_from_snippet(r.get("title", ""), company_name),
+                "amount_cr": _extract_amount_cr(r.get("content", "")),
+                "source": r.get("url", ""),
+                "description": r.get("title", "")[:100],
+            })
+            flags.append(f"Director {director_name} (DIN: {din}) — {r.get('title','')[:60]}")
+
+    # Search 2: Director + shell company / SFIO
+    shell_results = await web_search(
+        f'"{director_name}" DIN {din} "shell company" OR "SFIO" OR "Enforcement Directorate" India',
+        max_results=3
+    )
+    for r in shell_results:
+        combined = (r.get("title", "") + r.get("content", "")).lower()
+        if any(w in combined for w in ["shell", "sfio", "enforcement directorate", "money laundering"]):
+            shell_links += 1
+            flags.append(f"Director {director_name} — shell/SFIO: {r.get('title','')[:60]}")
+
+    return {
+        "npa_links": npa_links,
+        "shell_links": shell_links,
+        "npa_entries": npa_entries[:3],
+        "flags": flags,
+    }

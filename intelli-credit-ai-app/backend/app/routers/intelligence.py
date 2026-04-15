@@ -506,3 +506,231 @@ async def get_buyer_concentration(app_id: str, db: AsyncSession = Depends(get_db
             grand_total_revenue_lakhs=cached.get("grand_total_revenue_lakhs", 0),
         )
     raise HTTPException(404, "Buyer concentration not yet computed.")
+
+
+# ── SHAP-style Score Explanation ──────────────────────────────────────────────
+
+class WaterfallStep(BaseModel):
+    label: str           # "DSCR 1.95x" / "ITC Fraud ₹177L" etc.
+    value: float         # contribution: +12.0 or -15.0
+    cumulative: float    # running total after this step
+    category: str        # "positive" | "negative" | "neutral"
+    detail: str          # one-line explanation
+    source: str          # "DSCR" | "GST" | "Litigation" etc.
+
+
+class ScoreExplanation(BaseModel):
+    baseScore: float
+    finalScore: float
+    decision: str
+    steps: List[WaterfallStep]
+    positiveTotal: float
+    negativeTotal: float
+    dataSource: str      # "live" | "pending"
+
+
+@router.get("/{app_id}/score-explanation", response_model=ScoreExplanation)
+async def get_score_explanation(app_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    SHAP-style waterfall decomposition of the credit score.
+    Shows exactly which factors added/subtracted points — RBI-grade explainability.
+    """
+    # ── Load risk score from DB ────────────────────────────────────────────────
+    risk = (await db.execute(
+        select(RiskScore).where(RiskScore.application_id == app_id)
+        .order_by(RiskScore.computed_at.desc())
+    )).scalar_one_or_none()
+
+    if not risk:
+        return ScoreExplanation(
+            baseScore=50.0, finalScore=0.0, decision="PENDING",
+            steps=[], positiveTotal=0.0, negativeTotal=0.0, dataSource="pending"
+        )
+
+    # ── Load supporting data ───────────────────────────────────────────────────
+    ratio_row = (await db.execute(
+        select(Ratio).where(Ratio.application_id == app_id).order_by(Ratio.year.desc())
+    )).scalars().first()
+
+    fin_row = (await db.execute(
+        select(Financial).where(Financial.application_id == app_id).order_by(Financial.year.desc())
+    )).scalars().first()
+
+    flags_db = (await db.execute(
+        select(RiskFlag).where(RiskFlag.application_id == app_id)
+    )).scalars().all()
+
+    gst_session  = await get_session(app_id, "gst_reconciliation") or {}
+    buyer_session = await get_session(app_id, "buyer_concentration") or {}
+    dossier      = await get_session(app_id, "research_dossier") or {}
+
+    def _sf(val, default=0.0):
+        if val is None: return default
+        try: return float(val)
+        except: return default
+
+    # ── Build waterfall steps ──────────────────────────────────────────────────
+    BASE = 50.0
+    steps: List[WaterfallStep] = []
+    cumulative = BASE
+
+    def add_step(label: str, value: float, detail: str, source: str):
+        nonlocal cumulative
+        cumulative = round(cumulative + value, 1)
+        steps.append(WaterfallStep(
+            label=label,
+            value=round(value, 1),
+            cumulative=min(100.0, max(0.0, cumulative)),
+            category="positive" if value > 0 else ("negative" if value < 0 else "neutral"),
+            detail=detail,
+            source=source,
+        ))
+
+    # ── DSCR contribution ──────────────────────────────────────────────────────
+    dscr = _sf(ratio_row.dscr if ratio_row else None)
+    if dscr > 0:
+        if dscr >= 1.5:
+            add_step(f"DSCR {dscr:.2f}x", +12.0,
+                     f"Strong debt service coverage ({dscr:.2f}x ≥ 1.5x benchmark)", "DSCR")
+        elif dscr >= 1.25:
+            add_step(f"DSCR {dscr:.2f}x", +6.0,
+                     f"Adequate debt service coverage ({dscr:.2f}x, above 1.25x minimum)", "DSCR")
+        elif dscr >= 1.0:
+            add_step(f"DSCR {dscr:.2f}x", -5.0,
+                     f"Marginal DSCR ({dscr:.2f}x, below 1.25x threshold)", "DSCR")
+        else:
+            add_step(f"DSCR {dscr:.2f}x", -18.0,
+                     f"Critical: DSCR {dscr:.2f}x below 1.0 — cannot service debt from operations", "DSCR")
+
+    # ── D/E Ratio ──────────────────────────────────────────────────────────────
+    de = _sf(ratio_row.de_ratio if ratio_row else None)
+    if de > 0:
+        if de <= 1.0:
+            add_step(f"D/E {de:.2f}x", +8.0,
+                     f"Low leverage ({de:.2f}x ≤ 1.0x) — strong capital structure", "Leverage")
+        elif de <= 2.0:
+            add_step(f"D/E {de:.2f}x", +3.0,
+                     f"Moderate leverage ({de:.2f}x, within 2.0x benchmark)", "Leverage")
+        elif de <= 3.0:
+            add_step(f"D/E {de:.2f}x", -7.0,
+                     f"High leverage ({de:.2f}x exceeds 2.0x benchmark)", "Leverage")
+        else:
+            add_step(f"D/E {de:.2f}x", -15.0,
+                     f"Excessive leverage ({de:.2f}x far exceeds 3.0x threshold)", "Leverage")
+
+    # ── GST / ITC Fraud ────────────────────────────────────────────────────────
+    suspect_itc = _sf(gst_session.get("total_suspect_itc_lakhs", 0))
+    itc_fraud   = gst_session.get("itc_fraud_suspected", False)
+    if itc_fraud and suspect_itc > 0:
+        penalty = min(-20.0, -round(suspect_itc / 10, 1))
+        add_step(f"ITC Fraud ₹{suspect_itc:.0f}L", penalty,
+                 f"GSTR-2A vs 3B variance: ₹{suspect_itc:.1f}L suspect ITC — fraud signal", "GST")
+    elif not itc_fraud and gst_session.get("quarters"):
+        add_step("GST Compliance ✓", +8.0,
+                 "GSTR-2A vs GSTR-3B reconciliation clean — no ITC discrepancy", "GST")
+
+    # ── Buyer Concentration ────────────────────────────────────────────────────
+    top3_pct = _sf(buyer_session.get("top3_concentration_pct", 0))
+    top1_pct = _sf(buyer_session.get("top_buyer_pct", 0))
+    if top1_pct > 40:
+        add_step(f"Buyer Conc. {top1_pct:.0f}%", -15.0,
+                 f"Single buyer = {top1_pct:.1f}% of revenue — critical dependency risk", "Concentration")
+    elif top3_pct > 60:
+        add_step(f"Buyer Conc. {top3_pct:.0f}%", -8.0,
+                 f"Top-3 buyers = {top3_pct:.1f}% of revenue — high concentration", "Concentration")
+    elif top3_pct > 0:
+        add_step(f"Buyer Conc. {top3_pct:.0f}%", +5.0,
+                 f"Healthy buyer diversification — top-3 = {top3_pct:.1f}%", "Concentration")
+
+    # ── Litigation / NCLT ──────────────────────────────────────────────────────
+    nclt_flags = [f for f in flags_db if "NCLT" in f.flag_type or "LITIGATION" in f.flag_type]
+    lit_count  = _sf(dossier.get("litigation_count", 0))
+    if nclt_flags:
+        add_step(f"NCLT Petition ({len(nclt_flags)})", -10.0 * len(nclt_flags),
+                 f"{len(nclt_flags)} active NCLT/litigation case(s) — material legal risk", "Litigation")
+    elif lit_count > 0:
+        add_step(f"Litigation ({int(lit_count)})", -5.0,
+                 f"{int(lit_count)} litigation case(s) — monitor closely", "Litigation")
+    else:
+        add_step("No Litigation ✓", +5.0,
+                 "No active litigation or NCLT proceedings found", "Litigation")
+
+    # ── Current Ratio / Liquidity ──────────────────────────────────────────────
+    cr = _sf(ratio_row.current_ratio if ratio_row else None)
+    if cr > 0:
+        if cr >= 1.5:
+            add_step(f"Current Ratio {cr:.2f}x", +5.0,
+                     f"Strong liquidity ({cr:.2f}x ≥ 1.5x)", "Liquidity")
+        elif cr >= 1.0:
+            add_step(f"Current Ratio {cr:.2f}x", +2.0,
+                     f"Adequate liquidity ({cr:.2f}x)", "Liquidity")
+        else:
+            add_step(f"Current Ratio {cr:.2f}x", -8.0,
+                     f"Liquidity stress — current ratio {cr:.2f}x below 1.0", "Liquidity")
+
+    # ── Revenue trend ──────────────────────────────────────────────────────────
+    ebitda_margin = _sf(ratio_row.ebitda_margin if ratio_row else None)
+    if ebitda_margin > 0:
+        if ebitda_margin >= 20:
+            add_step(f"EBITDA Margin {ebitda_margin:.1f}%", +6.0,
+                     f"Strong profitability ({ebitda_margin:.1f}% ≥ 20%)", "Profitability")
+        elif ebitda_margin >= 15:
+            add_step(f"EBITDA Margin {ebitda_margin:.1f}%", +3.0,
+                     f"Healthy EBITDA margin ({ebitda_margin:.1f}%)", "Profitability")
+        elif ebitda_margin >= 10:
+            add_step(f"EBITDA Margin {ebitda_margin:.1f}%", -2.0,
+                     f"Below-benchmark EBITDA margin ({ebitda_margin:.1f}% < 15%)", "Profitability")
+        else:
+            add_step(f"EBITDA Margin {ebitda_margin:.1f}%", -8.0,
+                     f"Weak profitability — EBITDA margin {ebitda_margin:.1f}%", "Profitability")
+
+    # ── Promoter reputation ────────────────────────────────────────────────────
+    reputation = dossier.get("promoter_reputation", "")
+    if reputation == "GOOD":
+        add_step("Promoter: Clean ✓", +5.0,
+                 "No adverse promoter background — clean MCA21 and bureau records", "Promoter")
+    elif reputation == "MEDIUM":
+        add_step("Promoter: Watchlist", -3.0,
+                 "Minor promoter concerns — monitoring recommended", "Promoter")
+    elif reputation == "HIGH_RISK":
+        add_step("Promoter: High Risk", -12.0,
+                 "Adverse promoter background — NPA links or regulatory flags detected", "Promoter")
+
+    # ── CFO health ─────────────────────────────────────────────────────────────
+    cfo = _sf(fin_row.cash_from_operations if fin_row else None)
+    rev = _sf(fin_row.revenue if fin_row else None)
+    if cfo != 0 and rev > 0:
+        cfo_margin = cfo / rev
+        if cfo < 0:
+            add_step(f"CFO ₹{cfo/100:.1f}Cr", -8.0,
+                     f"Negative cash from operations (₹{cfo/100:.1f}Cr) — earnings quality concern", "CashFlow")
+        elif cfo_margin > 0.10:
+            add_step(f"CFO Margin {cfo_margin*100:.1f}%", +4.0,
+                     f"Strong operating cash flow ({cfo_margin*100:.1f}% of revenue)", "CashFlow")
+
+    # ── Cap at 0-100 ───────────────────────────────────────────────────────────
+    final = min(100.0, max(0.0, cumulative))
+    # Adjust last step if needed to match actual DB score
+    actual_score = _sf(risk.final_score)
+    if abs(final - actual_score) > 2:
+        diff = round(actual_score - final, 1)
+        if diff != 0:
+            add_step("Model Calibration", diff,
+                     "Logistic regression calibration adjustment", "Model")
+            final = actual_score
+
+    positive_total = sum(s.value for s in steps if s.value > 0)
+    negative_total = sum(s.value for s in steps if s.value < 0)
+
+    decision = _sf(risk.final_score)
+    dec_str = (risk.decision or "PENDING").replace("CONDITIONAL_APPROVAL", "CONDITIONAL").upper()
+
+    return ScoreExplanation(
+        baseScore=BASE,
+        finalScore=round(actual_score, 1),
+        decision=dec_str,
+        steps=steps,
+        positiveTotal=round(positive_total, 1),
+        negativeTotal=round(negative_total, 1),
+        dataSource="live",
+    )

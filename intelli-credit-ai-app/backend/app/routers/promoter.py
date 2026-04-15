@@ -29,6 +29,8 @@ class Director(BaseModel):
     riskLevel: str          # "clean" | "watchlist" | "flagged"
     cibilScore: int
     netWorth: str
+    fraudScore: float = 0.0  # 0-100: npaLinks * npaAmount + shellLinks * 20
+    fraudScoreBreakdown: Optional[str] = None
 
 
 class NetworkNode(BaseModel):
@@ -36,13 +38,19 @@ class NetworkNode(BaseModel):
     label: str
     type: str               # "director" | "company" | "shell" | "npa" | "related"
     risk: str               # "clean" | "warning" | "danger"
+    fraudScore: float = 0.0
+    amount: Optional[str] = None   # NPA amount for npa nodes
+    din: Optional[str] = None
+    isPulsing: bool = False        # True for NPA/shell nodes — triggers animation
 
 
 class NetworkEdge(BaseModel):
-    source: str             # node id  (frontend uses "from" but "from" is Python keyword)
+    source: str
     target: str
     label: str
     suspicious: bool
+    edgeType: str = "directorship"  # "directorship" | "npa_link" | "shell_link" | "related"
+    amount: Optional[str] = None
 
     def model_dump(self, **kw):
         d = super().model_dump(**kw)
@@ -75,8 +83,11 @@ class PromoterDataset(BaseModel):
     networkEdges: List[NetworkEdge]
     litigation: List[LitigationCase]
     news: List[NewsItem]
-    overallPromoterRisk: str   # "low" | "medium" | "high" | "critical"
+    overallPromoterRisk: str
     mca21Flags: List[str]
+    totalFraudScore: float = 0.0
+    fraudSummary: Optional[str] = None
+    networkStats: dict = {}
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -87,6 +98,19 @@ def _risk_level(npa_links: int, shell_links: int) -> str:
     if npa_links == 1:
         return "watchlist"
     return "clean"
+
+
+def _compute_fraud_score(npa_links: int, shell_links: int, npa_amount_cr: float = 0) -> float:
+    """
+    Fraud score 0-100:
+    - Each NPA link: 15 pts base + 5 pts per Cr (capped at 30)
+    - Each shell link: 20 pts
+    - Max 100
+    """
+    score = 0.0
+    score += min(npa_links * 15 + npa_amount_cr * 5, 60)
+    score += min(shell_links * 20, 40)
+    return round(min(score, 100), 1)
 
 
 def _overall_risk(directors: List[Director], lit_count: int) -> str:
@@ -102,30 +126,107 @@ def _overall_risk(directors: List[Director], lit_count: int) -> str:
 
 
 def _build_network(company_name: str, directors: List[Director],
-                   npa_db: list) -> tuple[List[NetworkNode], List[NetworkEdge]]:
+                   npa_db: list, litigation: list) -> tuple[List[NetworkNode], List[NetworkEdge]]:
+    """Build enriched fraud network with real NPA/shell connections."""
     nodes: List[NetworkNode] = []
     edges: List[NetworkEdge] = []
 
     # Central company node
-    nodes.append(NetworkNode(id="company_main", label=company_name,
-                              type="company", risk="clean"))
+    company_fraud = sum(d.fraudScore for d in directors) / max(len(directors), 1)
+    nodes.append(NetworkNode(
+        id="company_main",
+        label=company_name[:20],
+        type="company",
+        risk="danger" if company_fraud > 50 else ("warning" if company_fraud > 20 else "clean"),
+        fraudScore=round(company_fraud, 1),
+        isPulsing=company_fraud > 50,
+    ))
 
     for d in directors:
         d_id = f"dir_{d.din}"
         risk = "danger" if d.riskLevel == "flagged" else ("warning" if d.riskLevel == "watchlist" else "clean")
-        nodes.append(NetworkNode(id=d_id, label=d.name, type="director", risk=risk))
-        edges.append(NetworkEdge(source="company_main", target=d_id,
-                                  label=d.designation, suspicious=False))
+        nodes.append(NetworkNode(
+            id=d_id,
+            label=d.name.split()[-1],  # last name for brevity
+            type="director",
+            risk=risk,
+            fraudScore=d.fraudScore,
+            din=d.din,
+            isPulsing=d.riskLevel == "flagged",
+        ))
+        edges.append(NetworkEdge(
+            source="company_main",
+            target=d_id,
+            label=d.designation[:12],
+            suspicious=d.riskLevel != "clean",
+            edgeType="directorship",
+        ))
 
-        # NPA linked companies
+        # NPA-linked companies from research data
         for i, npa in enumerate(npa_db):
-            if npa.get("din") == d.din:
+            if str(npa.get("din", "")) == str(d.din):
                 npa_id = f"npa_{d.din}_{i}"
-                nodes.append(NetworkNode(id=npa_id, label=npa.get("company_name", "NPA Company"),
-                                          type="npa", risk="danger"))
-                edges.append(NetworkEdge(source=d_id, target=npa_id,
-                                          label=f"NPA ₹{npa.get('amount_cr','?')}Cr",
-                                          suspicious=True))
+                amount_cr = float(npa.get("amount_cr", 0))
+                nodes.append(NetworkNode(
+                    id=npa_id,
+                    label=npa.get("company_name", "NPA Co")[:15],
+                    type="npa",
+                    risk="danger",
+                    fraudScore=min(amount_cr * 10, 100),
+                    amount=f"₹{amount_cr:.1f}Cr NPA",
+                    isPulsing=True,
+                ))
+                edges.append(NetworkEdge(
+                    source=d_id,
+                    target=npa_id,
+                    label=f"NPA ₹{amount_cr:.0f}Cr",
+                    suspicious=True,
+                    edgeType="npa_link",
+                    amount=f"₹{amount_cr:.1f}Cr",
+                ))
+
+        # Shell company links
+        if d.shellLinks > 0:
+            for j in range(min(d.shellLinks, 2)):
+                shell_id = f"shell_{d.din}_{j}"
+                nodes.append(NetworkNode(
+                    id=shell_id,
+                    label=f"Shell Co {j+1}",
+                    type="shell",
+                    risk="danger",
+                    fraudScore=80.0,
+                    isPulsing=True,
+                ))
+                edges.append(NetworkEdge(
+                    source=d_id,
+                    target=shell_id,
+                    label="Shell link",
+                    suspicious=True,
+                    edgeType="shell_link",
+                ))
+
+    # Add NCLT/litigation nodes for critical cases
+    for case in litigation[:2]:
+        if case.severity in ("critical", "high"):
+            case_id = f"case_{case.court.replace(' ', '_')[:10]}"
+            nodes.append(NetworkNode(
+                id=case_id,
+                label=f"{case.court[:10]}",
+                type="related",
+                risk="warning",
+                fraudScore=40.0,
+                amount=case.amount,
+                isPulsing=False,
+            ))
+            edges.append(NetworkEdge(
+                source="company_main",
+                target=case_id,
+                label=case.caseType[:10],
+                suspicious=True,
+                edgeType="related",
+                amount=case.amount,
+            ))
+
     return nodes, edges
 
 
@@ -163,8 +264,20 @@ async def get_promoter(app_id: str, db: AsyncSession = Depends(get_db)):
 
     directors: List[Director] = []
     for d in raw_dirs:
-        npa_links  = int(d.get("npa_links", 0))
+        npa_links   = int(d.get("npa_links", 0))
         shell_links = int(d.get("shell_links", 0))
+        # Compute NPA total amount for fraud score
+        npa_amount_cr = sum(
+            float(npa.get("amount_cr", 0))
+            for npa in npa_db
+            if str(npa.get("din", "")) == str(d.get("din", ""))
+        )
+        fraud_score = _compute_fraud_score(npa_links, shell_links, npa_amount_cr)
+        breakdown_parts = []
+        if npa_links:
+            breakdown_parts.append(f"{npa_links} NPA link(s) ₹{npa_amount_cr:.1f}Cr")
+        if shell_links:
+            breakdown_parts.append(f"{shell_links} shell co link(s)")
         directors.append(Director(
             name=d.get("name", "Unknown"),
             din=d.get("din", "00000000"),
@@ -177,11 +290,9 @@ async def get_promoter(app_id: str, db: AsyncSession = Depends(get_db)):
             riskLevel=_risk_level(npa_links, shell_links),
             cibilScore=int(d.get("cibil_score", 700)),
             netWorth=d.get("net_worth", "—"),
+            fraudScore=fraud_score,
+            fraudScoreBreakdown=", ".join(breakdown_parts) if breakdown_parts else "No fraud signals",
         ))
-
-    # ── Fraud network graph ───────────────────────────────────────────────────
-    npa_db = fraud_data.get("npa_entries", [])
-    nodes, edges = _build_network(company_name, directors, npa_db)
 
     # ── Litigation ────────────────────────────────────────────────────────────
     raw_lit = []
@@ -202,6 +313,10 @@ async def get_promoter(app_id: str, db: AsyncSession = Depends(get_db)):
             description=c.get("description", ""),
             severity=sev,
         ))
+
+    # ── Fraud network graph ───────────────────────────────────────────────────
+    npa_db = fraud_data.get("npa_entries", [])
+    nodes, edges = _build_network(company_name, directors, npa_db, litigation)
 
     # ── News ──────────────────────────────────────────────────────────────────
     raw_news = []
@@ -230,6 +345,25 @@ async def get_promoter(app_id: str, db: AsyncSession = Depends(get_db)):
             mca21_flags = ["One directorship with delayed payments"]
 
     overall_risk = _overall_risk(directors, len(litigation))
+    total_fraud = sum(d.fraudScore for d in directors)
+    fraud_summary = None
+    if total_fraud > 0:
+        flagged = [d for d in directors if d.riskLevel == "flagged"]
+        fraud_summary = (
+            f"{len(flagged)} director(s) flagged. "
+            f"Total fraud exposure: {total_fraud:.0f} pts. "
+            f"NPA links: {sum(d.npaLinks for d in directors)}, "
+            f"Shell links: {sum(d.shellLinks for d in directors)}."
+        )
+
+    network_stats = {
+        "totalNodes": len(nodes),
+        "totalEdges": len(edges),
+        "suspiciousEdges": sum(1 for e in edges if e.suspicious),
+        "npaNodes": sum(1 for n in nodes if n.type == "npa"),
+        "shellNodes": sum(1 for n in nodes if n.type == "shell"),
+        "pulsingNodes": sum(1 for n in nodes if n.isPulsing),
+    }
 
     return PromoterDataset(
         directors=directors,
@@ -239,6 +373,9 @@ async def get_promoter(app_id: str, db: AsyncSession = Depends(get_db)):
         news=news,
         overallPromoterRisk=overall_risk,
         mca21Flags=mca21_flags,
+        totalFraudScore=round(total_fraud, 1),
+        fraudSummary=fraud_summary,
+        networkStats=network_stats,
     )
 
 

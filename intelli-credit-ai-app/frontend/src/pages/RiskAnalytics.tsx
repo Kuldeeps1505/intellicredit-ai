@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { usePipeline } from "@/contexts/PipelineContext";
 import { RiskGauge } from "@/components/risk/RiskGauge";
+import { ScoreWaterfall } from "@/components/ScoreWaterfall";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -273,6 +274,21 @@ const RiskAnalytics = () => {
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* Score Waterfall — SHAP-style explainability */}
+        {applicationId && (
+          <Card className="p-4 border-primary/20">
+            <div className="flex items-center gap-2 mb-4">
+              <h3 className="text-xs font-display text-primary uppercase tracking-wider font-bold">
+                Score Decomposition — Explainable AI
+              </h3>
+              <Badge className="text-[9px] bg-primary/20 text-primary border-primary/30 px-1.5 py-0">
+                SHAP-style · RBI Grade
+              </Badge>
+            </div>
+            <ScoreWaterfall applicationId={applicationId} />
+          </Card>
+        )}
 
         {/* Row 2: GSTR Waterfall + Buyer Concentration */}
         <div className="grid grid-cols-2 gap-4">

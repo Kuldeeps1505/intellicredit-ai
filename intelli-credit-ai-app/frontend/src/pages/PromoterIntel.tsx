@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { usePipeline } from "@/contexts/PipelineContext";
-import { getPromoterData, NetworkNode, NetworkEdge } from "@/lib/promoterData";
+import { getPromoterData } from "@/lib/promoterData";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -8,9 +8,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { motion } from "framer-motion";
 import {
   Users, AlertTriangle, Shield, ShieldAlert, ShieldX,
-  ExternalLink, Newspaper, Scale, Building2, CircleDot, Maximize2, X,
+  ExternalLink, Newspaper, Scale, Maximize2, X,
 } from "lucide-react";
 import { useMemo } from "react";
+import { FraudNetworkGraph } from "@/components/FraudNetworkGraph";
 
 const riskColors = {
   clean: "hsl(var(--safe))",
@@ -212,33 +213,39 @@ const PromoterIntel = () => {
             ))}
           </div>
 
-          {/* Network Graph — Compact Preview */}
+          {/* Network Graph — D3 Force-Directed Fraud Network */}
           <Card data-tour="promoter-network" className="p-4">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-xs font-display text-muted-foreground uppercase tracking-wider">Entity Network Map</h3>
-              <button
-                onClick={() => { setMapExpanded(true); setZoom(1); setPan({ x: 0, y: 0 }); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-primary/10 hover:bg-primary/20 text-primary text-[10px] font-display transition-colors"
-              >
-                <Maximize2 className="h-3 w-3" /> Expand Full View
-              </button>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="text-xs font-display text-muted-foreground uppercase tracking-wider">Fraud Network Map</h3>
+                {(data as any).fraudSummary && (
+                  <p className="text-[10px] text-destructive mt-0.5">{(data as any).fraudSummary}</p>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {(data as any).totalFraudScore > 0 && (
+                  <div className="flex items-center gap-1 px-2 py-1 bg-destructive/15 border border-destructive/30 rounded-full">
+                    <AlertTriangle className="h-3 w-3 text-destructive" />
+                    <span className="text-[10px] font-display text-destructive font-bold">
+                      Fraud Score: {Math.round((data as any).totalFraudScore)}
+                    </span>
+                  </div>
+                )}
+                <button
+                  onClick={() => setMapExpanded(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-primary/10 hover:bg-primary/20 text-primary text-[10px] font-display transition-colors"
+                >
+                  <Maximize2 className="h-3 w-3" /> Expand
+                </button>
+              </div>
             </div>
-            <svg viewBox="0 0 600 400" className="w-full h-auto rounded-lg border border-border" style={{ minHeight: 250 }}>
-              {renderNetworkSvg()}
-            </svg>
-            <div className="flex gap-4 mt-2 justify-center">
-              {[
-                { icon: "👤", label: "Director" },
-                { icon: "🏢", label: "Company" },
-                { icon: "🐚", label: "Shell" },
-                { icon: "💀", label: "NPA" },
-                { icon: "🔗", label: "Related" },
-              ].map((l) => (
-                <span key={l.label} className="text-[9px] text-muted-foreground flex items-center gap-1">
-                  <span>{l.icon}</span> {l.label}
-                </span>
-              ))}
-            </div>
+            <FraudNetworkGraph
+              nodes={data.networkNodes as any}
+              edges={data.networkEdges as any}
+              width={500}
+              height={280}
+              compact
+            />
           </Card>
 
           {/* Fullscreen Network Map Overlay */}

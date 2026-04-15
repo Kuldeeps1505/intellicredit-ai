@@ -14,6 +14,7 @@ from app.routers.diligence import router as diligence_router
 from app.routers.audit import router as audit_router
 from app.routers.facilities import router as facilities_router
 from app.routers.cam import router as cam_router
+from app.routers.aa import router as aa_router
 
 app = FastAPI(
     title="IntelliCredit AI",
@@ -44,6 +45,7 @@ app.include_router(diligence_router)      # GET /api/applications/{id}/diligence
 app.include_router(audit_router)          # GET /api/applications/{id}/audit + POST /audit/override
 app.include_router(facilities_router)     # GET /api/applications/{id}/facilities
 app.include_router(cam_router)            # GET/POST /api/applications/{id}/cam + /chat + /dd-notes + /counterfactuals
+app.include_router(aa_router)             # POST /api/applications/{id}/aa/consent/initiate + /fi/fetch
 
 
 @app.on_event("startup")

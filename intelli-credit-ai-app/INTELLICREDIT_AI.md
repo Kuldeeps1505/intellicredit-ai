@@ -271,3 +271,35 @@ Generated via: `python generate_test_annual_report.py`
 | Financial ratios computed | 15 |
 | Anomaly detection rules | 7 |
 | Five-Cs dimensions | 5 |
+  
+
+
+  1. Account Aggregator (AA) Consent Flow — +0.5 pts
+The biggest India Stack differentiator you're not fully using. Right now it's a mock. Implement the actual Sahamati sandbox:
+
+Borrower gets an OTP on their AA app
+Bank statements + GST data pulled automatically — zero manual upload
+This is the "wow" moment for judges who know India Stack
+Why it matters: No other hackathon project will have a working AA consent flow. This alone separates you from everyone.
+
+. Real-time Fraud Network Visualization — +0.3 pts
+Your D3 network graph exists but uses mock data. Wire it to real Zaubacorp + MCA21 data:
+
+Show actual shell company connections
+Highlight NPA-linked entities in red with pulsing animation
+Add "fraud score" per director based on NPA count × amount
+Why it matters: Judges can see fraud visually. It's the most memorable demo moment.
+
+Explainable AI Score Card (SHAP-style) — +0.2 pts
+Instead of just showing the logistic regression score, show a waterfall chart:
+
+Base score:          50
++ DSCR 1.95x:       +12
++ Clean GST:         +8
+- D/E 2.8x:          -7
+- Buyer conc 68%:   -15
+- NCLT petition:    -10
+= Final: 38/100
+This is what RBI actually wants — every point explained.
+
+Why it matters: Judges from banking/fintech will immediately recognize this as production-grade.

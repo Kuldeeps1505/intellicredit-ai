@@ -9,6 +9,7 @@ import { usePipeline } from "@/contexts/PipelineContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
+import { AAConsentWizard } from "@/components/AAConsentWizard";
 
 type UploadMode = "manual" | "aa";
 
@@ -37,12 +38,13 @@ const statusIcon: Record<DocItem["status"], React.ReactNode> = {
 };
 
 export default function DocumentUpload() {
-  const { setApplicationId, setPendingFiles, startPipeline } = usePipeline();
+  const { setApplicationId, setPendingFiles, startPipeline, applicationId } = usePipeline();
   const navigate = useNavigate();
 
   const [mode, setMode] = useState<UploadMode>("manual");
   const [docs, setDocs] = useState<DocItem[]>(requiredDocs);
   const [aaStep, setAaStep] = useState(0);
+  const [aaDataReady, setAaDataReady] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [showDocPicker, setShowDocPicker] = useState(false);
   const [selectedDocIndex, setSelectedDocIndex] = useState<number | null>(null);
@@ -399,124 +401,10 @@ export default function DocumentUpload() {
                 transition={{ duration: 0.2 }}
                 className="bg-card border border-border rounded-lg p-6"
               >
-                <h3 className="font-display text-sm text-primary mb-6">
-                  Account Aggregator Flow
-                </h3>
-
-                <div className="space-y-0">
-                  {[
-                    {
-                      step: 1,
-                      title: "Enter Borrower Mobile",
-                      icon: Phone,
-                      content: (
-                        <div className="flex gap-2 mt-2">
-                          <div className="flex-1 border-b border-border pb-2 text-sm font-mono-numbers text-foreground">
-                            +91 98765 43210
-                          </div>
-                          <Button
-                            size="sm"
-                            onClick={advanceAA}
-                            className="bg-primary text-primary-foreground hover:bg-primary/90 font-display text-xs"
-                          >
-                            Send OTP
-                          </Button>
-                        </div>
-                      ),
-                    },
-                    {
-                      step: 2,
-                      title: "Borrower Approves on AA App",
-                      icon: Smartphone,
-                      content: (
-                        <div className="mt-3 flex items-center gap-4">
-                          <div className="w-20 h-36 bg-secondary rounded-xl border border-border flex items-center justify-center">
-                            {aaStep >= 2 ? (
-                              <Check className="h-8 w-8 text-safe" />
-                            ) : (
-                              <Loader2 className="h-5 w-5 text-info animate-spin" />
-                            )}
-                          </div>
-                          <p className="text-xs text-muted-foreground">
-                            {aaStep >= 2 ? "Consent approved ✓" : "Waiting for borrower to approve consent..."}
-                          </p>
-                        </div>
-                      ),
-                    },
-                    {
-                      step: 3,
-                      title: "Data Fetched Automatically",
-                      icon: FileText,
-                      content: (
-                        <div className="mt-2 space-y-1.5">
-                          {["Bank Statements", "GST Returns", "ITR Data"].map((item, i) => (
-                            <div key={item} className="flex items-center gap-2 text-sm font-body">
-                              {aaStep >= 3 ? (
-                                <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: i * 0.2 }}>
-                                  <CheckCircle2 className="h-4 w-4 text-safe" />
-                                </motion.div>
-                              ) : (
-                                <div className="h-4 w-4 rounded-full border border-border" />
-                              )}
-                              <span className={aaStep >= 3 ? "text-foreground" : "text-muted-foreground"}>
-                                {item}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      ),
-                    },
-                  ].map((s, idx) => {
-                    const completed = aaStep > idx;
-                    const active = aaStep === idx;
-                    return (
-                      <div key={s.step} className="relative">
-                        {idx > 0 && (
-                          <div className={`absolute left-[15px] -top-0 w-0.5 h-4 ${completed ? "bg-primary" : "bg-border"}`} />
-                        )}
-                        <div
-                          className={`relative pl-10 pb-6 ${idx < 2 ? "border-l-2 ml-[15px]" : "ml-[15px]"} ${
-                            completed ? "border-primary" : "border-border"
-                          }`}
-                        >
-                          <div
-                            className={`absolute left-[-13px] top-0 h-[26px] w-[26px] rounded-full flex items-center justify-center border-2 ${
-                              completed
-                                ? "bg-primary border-primary"
-                                : active
-                                ? "bg-card border-primary"
-                                : "bg-card border-border"
-                            }`}
-                          >
-                            {completed ? (
-                              <Check className="h-3.5 w-3.5 text-primary-foreground" />
-                            ) : (
-                              <span className={`text-[10px] font-display ${active ? "text-primary" : "text-muted-foreground"}`}>
-                                {s.step}
-                              </span>
-                            )}
-                          </div>
-
-                          <h4 className={`text-sm font-display font-medium ${active || completed ? "text-foreground" : "text-muted-foreground"}`}>
-                            {s.title}
-                          </h4>
-                          {(active || completed) && s.content}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {aaStep < 3 && aaStep > 0 && (
-                  <Button
-                    onClick={advanceAA}
-                    variant="outline"
-                    size="sm"
-                    className="mt-2 font-display text-xs border-primary/30 text-primary hover:bg-primary/10"
-                  >
-                    Simulate Next Step
-                  </Button>
-                )}
+                <AAConsentWizard
+                  applicationId={applicationId}
+                  onDataFetched={() => setAaDataReady(true)}
+                />
               </motion.div>
             )}
           </AnimatePresence>

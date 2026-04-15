@@ -106,12 +106,36 @@ export const api = {
   getApplication:   (appId: string) => request<ApplicationSummary>(`/api/applications/${appId}`),
 
   getRisk:          (appId: string) => request<unknown>(`/api/applications/${appId}/risk`),
+  getScoreExplanation: (appId: string) => request<{
+    baseScore: number; finalScore: number; decision: string;
+    steps: { label: string; value: number; cumulative: number; category: string; detail: string; source: string }[];
+    positiveTotal: number; negativeTotal: number; dataSource: string;
+  }>(`/api/applications/${appId}/score-explanation`),
   getPromoter:      (appId: string) => request<import("@/lib/promoterData").PromoterDataset>(`/api/applications/${appId}/promoter`),
   getDiligence:     (appId: string) => request<import("@/lib/diligenceData").DiligenceDataset>(`/api/applications/${appId}/diligence`),
   getCam:           (appId: string) => request<import("@/lib/camData").CamDataset>(`/api/applications/${appId}/cam`),
   getFinancials:    (appId: string) => request<import("@/lib/financialSpreadsData").FinancialSpreadsDataset>(`/api/applications/${appId}/financials`),
   getBankAnalytics: (appId: string) => request<import("@/lib/bankStatementData").BankStatementDataset>(`/api/applications/${appId}/bank-analytics`),
   getAudit:         (appId: string) => request<import("@/lib/auditTrailData").AuditTrailDataset>(`/api/applications/${appId}/audit`),
+
+  // Account Aggregator (India Stack)
+  aaInitiateConsent: (appId: string, mobile: string, purpose?: string) =>
+    request<{ consentHandle: string; redirectUrl: string; txnId: string; provider: string; status: string; message?: string; aaApp?: string; expiresIn?: string }>(
+      `/api/applications/${appId}/aa/consent/initiate`,
+      { method: "POST", body: JSON.stringify({ mobile, purpose: purpose || "Loan Appraisal" }) }
+    ),
+  aaConsentStatus: (appId: string) =>
+    request<{ consentHandle: string; consentId?: string; status: string; provider: string; approvedAt?: string }>(
+      `/api/applications/${appId}/aa/consent/status`
+    ),
+  aaFetchFI: (appId: string) =>
+    request<{ success: boolean; accountsFetched: number; bankStatementsFetched: boolean; gstDataFetched: boolean; message: string }>(
+      `/api/applications/${appId}/aa/fi/fetch`, { method: "POST" }
+    ),
+  aaSessionStatus: (appId: string) =>
+    request<{ step: string; consentHandle?: string; consentStatus?: string; dataFetched: boolean; bankStatements: boolean; gstData: boolean }>(
+      `/api/applications/${appId}/aa/status`
+    ),
 };
 
 // ── WebSocket factory ──────────────────────────────────────────────────────────

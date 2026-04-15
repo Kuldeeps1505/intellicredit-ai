@@ -272,7 +272,7 @@ async def upload_document_file(
         ocr_status="PENDING", extraction_status="PENDING", file_size_bytes=len(file_bytes),
     )
     db.add(doc)
-    app.status = "PROCESSING"
+    # Don't set PROCESSING here — that's set when pipeline actually starts
     await db.commit()
     return DocItem(name=file.filename or "document", status="pending",
                    size=_size_str(len(file_bytes)), doc_type=documentType)
@@ -296,13 +296,17 @@ async def start_pipeline(
     app = (await db.execute(select(Application).where(Application.id == app_id))).scalar_one_or_none()
     if not app:
         raise HTTPException(404, "Application not found")
-    if app.status == "PROCESSING":
+
+    # Check if pipeline is actively running via state file (not DB status which can be stale)
+    from app.services.event_bus import get_pipeline_state, reset_pipeline_state
+    current_state = get_pipeline_state(app_id)
+    if current_state.get("progress", 0) > 0 and not current_state.get("done", False):
         return {"jobId": app_id, "status": "already_running"}
+
+    # Reset state file and start fresh
+    reset_pipeline_state(app_id)
     app.status = "PROCESSING"
     await db.commit()
-    # Run in a separate thread with its own event loop — doesn't block uvicorn
-    from app.services.event_bus import reset_pipeline_state
-    reset_pipeline_state(app_id)
     t = threading.Thread(target=_run_pipeline_in_thread, args=(app_id,), daemon=True)
     t.start()
     return {"jobId": app_id, "status": "started"}

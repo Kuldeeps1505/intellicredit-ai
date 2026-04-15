@@ -32,8 +32,19 @@ class Settings(BaseSettings):
     sandbox_secret_key: str = ""
     sandbox_base_url: str = "https://api.sandbox.co.in"
 
+    # Account Aggregator (India Stack)
+    aa_provider: str = "mock"          # "setu" | "sahamati" | "mock"
+    setu_client_id: str = ""
+    setu_client_secret: str = ""
+    sahamati_token: str = ""
+    fiu_id: str = "IntelliCredit-FIU-UAT"
+    aa_id: str = "ONEMONEY-AA"
+
     # Tavily
     tavily_api_key: str = ""
+
+    # eCourts
+    ecourts_api_key: str = ""
 
     # App
     app_env: str = "development"
@@ -41,6 +52,7 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
 
 @lru_cache()

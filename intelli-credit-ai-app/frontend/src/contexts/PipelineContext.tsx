@@ -102,7 +102,7 @@ export const PipelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     seenLogsRef.current = new Set();
     wsRef.current?.close();
     wsRef.current = null;
-    if (pollRef.current) clearInterval(pollRef.current);
+    if (pollRef.current) { clearInterval(pollRef.current); clearTimeout(pollRef.current as unknown as ReturnType<typeof setTimeout>); }
     pollRef.current = null;
   }, []);
 
@@ -174,9 +174,15 @@ export const PipelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const startPolling = useCallback((appId: string) => {
     if (pollRef.current) clearInterval(pollRef.current);
-    pollRef.current = setInterval(async () => {
+    let fastPollCount = 0;
+    // Poll every 500ms for first 60 polls (30s), then every 2s
+    const poll = async () => {
       try { const data = await api.getPipelineStatus(appId); applyStatusResponse(data); } catch { /* ignore */ }
-    }, POLL_MS);
+      fastPollCount++;
+      const nextInterval = fastPollCount < 60 ? 500 : 2000;
+      pollRef.current = setTimeout(poll, nextInterval) as unknown as ReturnType<typeof setInterval>;
+    };
+    pollRef.current = setTimeout(poll, 300) as unknown as ReturnType<typeof setInterval>;
   }, [applyStatusResponse]);
 
   const connectWebSocket = useCallback((appId: string) => {
